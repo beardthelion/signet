@@ -627,6 +627,48 @@ export class PassportClient {
   }
 
   /**
+   * The ?view=hashes map: every stored entry key with its ciphertext hash,
+   * no bodies. Empty object when the passport does not exist yet. This is
+   * the cheap enumeration path for callers (the MCP adapter's list tool)
+   * that need keys without downloading and decrypting every entry.
+   */
+  async hashes(): Promise<Record<string, string>> {
+    return (await this.hashesView()) ?? {}
+  }
+
+  /**
+   * Read and decrypt one entry, verified against the signed manifest
+   * (PS-041): the fetched blob's ciphertext hash must equal the hash the
+   * verified manifest names for the key, and GCM must authenticate under
+   * that key. Returns null when the passport does not exist or the manifest
+   * does not name the key; a blob the manifest does not name can never reach
+   * decryption.
+   */
+  async readEntry(entryKey: string): Promise<string | null> {
+    const remote = await this.remoteManifest()
+    if (!remote) return null
+    this.adoptManifest(remote)
+    const expectedHash = remote.signed.manifest.entries[entryKey]
+    if (expectedHash === undefined) return null
+    const res = await this.request('GET', this.entryPath(entryKey))
+    if (!res.ok) throw httpError(res)
+    const body = JSON.parse(res.raw) as { entry?: unknown; hash?: unknown }
+    if (typeof body.entry !== 'string') {
+      throw new PassportIntegrityError(`passport: no blob in the response for "${entryKey}"`)
+    }
+    if (body.hash !== expectedHash || ciphertextHash(body.entry) !== expectedHash) {
+      throw new PassportIntegrityError(
+        `passport: ciphertext hash mismatch for "${entryKey}" — blob does not match the manifest`,
+      )
+    }
+    try {
+      return decryptEntry(this.encKey, entryKey, body.entry)
+    } catch (err) {
+      throw new PassportDecryptError(entryKey, (err as Error).message)
+    }
+  }
+
+  /**
    * Rotate the signing key (PS-050/051): generate the successor, sign the
    * attestation with the CURRENT key, and record it under
    * `identity/rotations/<seq>.json` in the passport. Returns everything the
