@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "passport-suite/conformance-report",
+  "title": "AI Passport conformance report",
+  "type": "object",
+  "required": ["specVersion", "target", "generatedBy", "results", "summary"],
+  "properties": {
+    "specVersion": { "type": "string", "pattern": "^passport-spec/[0-9]+\\.[0-9]+$" },
+    "target": { "type": "string" },
+    "generatedBy": { "type": "string" },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["clause", "status"],
+        "properties": {
+          "clause": { "type": "string", "pattern": "^PS-[0-9]{3}$" },
+          "status": { "enum": ["pass", "fail", "unsupported"] },
+          "detail": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["pass", "fail", "unsupported"],
+      "properties": {
+        "pass": { "type": "integer" },
+        "fail": { "type": "integer" },
+        "unsupported": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
