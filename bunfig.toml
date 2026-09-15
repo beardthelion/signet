@@ -1,0 +1,5 @@
+[test]
+# Runs before any module (incl. the env-frozen caps in src/server/quota.ts)
+# loads, so test env is in place regardless of which test file imports a src
+# module first.
+preload = ["./tests/setup.ts"]
