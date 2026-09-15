@@ -8,6 +8,7 @@
  *   passport init [--force]       create custody (genesis DID + passphrase) and publish
  *   passport push <dir>           encrypt + upload changed entries from <dir>
  *   passport pull <dir>           verify + download + decrypt into <dir>
+ *   passport learn <file>         distill session content into memory/ entries (U7)
  *   passport export <file>        write an encrypted custody bundle (PS-102)
  *   passport import <file>        restore custody from a bundle [--force]
  *   passport rotate               rotate the signing key (PS-050)
@@ -43,6 +44,7 @@ import {
 } from '../src/client/custody.ts'
 import { generateIdentity, identityFromPkcs8, namespaceFor } from '../src/client/identity.ts'
 import type { ScanMode } from '../src/client/secretscan.ts'
+import { captureSession } from '../src/learn/capture.ts'
 import { SECTIONS } from '../src/types/index.ts'
 
 const SECTION_SET: ReadonlySet<string> = new Set(SECTIONS)
@@ -209,6 +211,18 @@ async function cmdPull(dir: string): Promise<void> {
   )
 }
 
+async function cmdLearn(file: string): Promise<void> {
+  const { client, secrets } = await makeClient()
+  const text = await readFile(file, 'utf8')
+  const r = await captureSession(client, text, { harness: 'cli' })
+  await recordSeq(client, secrets)
+  console.log(
+    `learned in ${client.namespace}: ${r.uploaded.length} captured, ` +
+      `${r.unchanged.length} unchanged, ${r.blocked.length} blocked by the secret scan`,
+  )
+  for (const b of r.blocked) console.error(`  blocked ${b.key}: ${b.rules.join(', ')}`)
+}
+
 async function cmdExport(file: string): Promise<void> {
   const secrets = await loadCustody()
   if (!secrets) throw new Error('no custody found — nothing to export')
@@ -261,6 +275,10 @@ try {
       if (!a) usage()
       await cmdPull(a!)
       break
+    case 'learn':
+      if (!a) usage()
+      await cmdLearn(a!)
+      break
     case 'export':
       if (!a) usage()
       await cmdExport(a!)
@@ -297,6 +315,7 @@ function usage(): never {
       '  passport init [--force]    create custody (genesis DID + passphrase) and publish\n' +
       '  passport push <dir>        encrypt + upload changed entries from <dir>\n' +
       '  passport pull <dir>        verify + download + decrypt into <dir>\n' +
+      '  passport learn <file>      distill session content into memory/ entries\n' +
       '  passport export <file>     write an encrypted custody bundle\n' +
       '  passport import <file>     restore custody from a bundle [--force]\n' +
       '  passport rotate            rotate the signing key\n' +
