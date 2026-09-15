@@ -11,8 +11,9 @@
  *
  * The backend is a narrow interface (`CustodyBackend`) so an OS keychain can
  * slot in later; the `0600` file is the required v1 backend and the only one
- * implemented here. Writes are atomic (tmp file + rename) and re-assert the
- * mode every time, since `writeFile`'s mode only applies at creation.
+ * implemented here. Writes are atomic (tmp file + rename) and the tmp
+ * file's mode is re-asserted before it lands, since `writeFile`'s mode only
+ * applies at creation.
  *
  * Export/import (PS-102) moves custody between machines as an encrypted
  * bundle: the secrets JSON is encrypted with a user-supplied export
@@ -25,7 +26,7 @@
  * PS-103: key loss is total loss. There is deliberately no recovery path.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -80,8 +81,22 @@ export class FileCustodyBackend implements CustodyBackend {
   }
 
   async load(): Promise<CustodySecrets | null> {
-    if (!existsSync(this.path)) return null
-    const parsed = CustodySecrets.safeParse(JSON.parse(readFileSync(this.path, 'utf8')))
+    let raw: string
+    try {
+      raw = readFileSync(this.path, 'utf8')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw err
+    }
+    // Invalid JSON lands in the same fail-closed refusal as a schema miss —
+    // a bare SyntaxError would leak a parse detail, not an instruction.
+    let json: unknown
+    try {
+      json = JSON.parse(raw)
+    } catch {
+      json = undefined
+    }
+    const parsed = CustodySecrets.safeParse(json)
     if (!parsed.success) {
       throw new Error(
         `custody file ${this.path} is unreadable or malformed; refusing to guess. ` +
@@ -94,11 +109,12 @@ export class FileCustodyBackend implements CustodyBackend {
   async save(secrets: CustodySecrets): Promise<void> {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     // Write-then-rename so a crash never leaves a half-written secrets file.
+    // The tmp file's mode is re-asserted before it lands, since writeFile's
+    // mode only applies at creation; the rename carries it onto the target.
     const tmp = `${this.path}.tmp`
     writeFileSync(tmp, `${JSON.stringify(secrets, null, 2)}\n`, { mode: 0o600 })
     chmodSync(tmp, 0o600)
     renameSync(tmp, this.path)
-    chmodSync(this.path, 0o600)
   }
 
   describe(): string {

@@ -8,20 +8,26 @@
  * authentication, so unauthenticated abuse cannot throttle authenticated
  * holders and each holder gets its own allowance.
  *
+ * The bucket map cannot grow without bound: entries idle for a few full
+ * refill windows are evicted, which is unobservable because a bucket that
+ * idle has already refilled to CAP anyway.
+ *
  * Time is injected so it's deterministic to test; the handler passes
  * Date.now().
  */
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]
-  if (raw === undefined || raw.trim() === '') return fallback
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : fallback
-}
+import { envInt } from './env.ts'
 
 const perMinute = envInt('PASSPORT_RATE_PER_MINUTE', 240)
 const CAP = envInt('PASSPORT_RATE_BURST', 480)
 const REFILL_PER_MS = perMinute / 60_000
+
+/** Time for an empty bucket to refill to capacity — one refill window. */
+const REFILL_WINDOW_MS = perMinute > 0 ? CAP / REFILL_PER_MS : 0
+/** Buckets idle this long have certainly refilled to CAP; safe to drop. */
+const IDLE_EVICT_MS = REFILL_WINDOW_MS * 3
+/** Sweep for idle buckets only once the map is large enough to matter. */
+const EVICT_THRESHOLD = 4096
 
 type Bucket = { tokens: number; updatedAt: number }
 
@@ -36,6 +42,12 @@ export type RateResult = { ok: boolean; retryAfterSec: number }
  */
 export function take(key: string, now: number): RateResult {
   if (perMinute <= 0) return { ok: true, retryAfterSec: 0 }
+
+  if (buckets.size > EVICT_THRESHOLD) {
+    for (const [k, b] of buckets) {
+      if (now - b.updatedAt > IDLE_EVICT_MS) buckets.delete(k)
+    }
+  }
 
   let b = buckets.get(key)
   if (!b) {
@@ -56,13 +68,4 @@ export function take(key: string, now: number): RateResult {
   // Seconds until one token is available again.
   const retryAfterSec = Math.max(1, Math.ceil((1 - b.tokens) / REFILL_PER_MS / 1000))
   return { ok: false, retryAfterSec }
-}
-
-/**
- * Drop every bucket. Tests only: buckets are in-process and bun shares one
- * process across test files, so a test that exhausts a bucket would otherwise
- * refuse requests in every later suite.
- */
-export function _reset(): void {
-  buckets.clear()
 }

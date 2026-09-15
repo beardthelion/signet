@@ -14,16 +14,10 @@
  */
 
 import type { Section } from '../types/index.ts'
+import { envInt } from './env.ts'
 
 const KiB = 1024
 const MiB = 1024 * KiB
-
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]
-  if (raw === undefined || raw.trim() === '') return fallback
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : fallback
-}
 
 export const caps = {
   /** Ciphertext bytes any single entry may hold. */

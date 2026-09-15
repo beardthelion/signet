@@ -1,9 +1,8 @@
 /**
  * Learning capture: distilled learnings -> `memory/<type>/<slug>.md`
- * passport entries (suite U7; SPEC section 6 PS-120, section 5 PS-110,
- * plan KTD8).
+ * passport entries (SPEC section 6 PS-120, section 5 PS-110).
  *
- * Every learned entry carries YAML frontmatter with `type:` (the KTD8
+ * Every learned entry carries YAML frontmatter with `type:` (the PS-120
  * memory type) and `provenance: learned:<harness>` so a consuming harness
  * can label or down-weight non-self-authored content on recall. Entries
  * deliberately carry no timestamps or session ids: identical learned
@@ -61,14 +60,14 @@ function shortHash(text: string): string {
  * words, hyphen-joined, bounded. The caller substitutes a hash when this
  * comes back empty.
  */
-export function slugify(title: string): string {
+function slugify(title: string): string {
   const words = title.toLowerCase().match(/[a-z0-9]+/g) ?? []
   return words.slice(0, 8).join('-').slice(0, MAX_SLUG_CHARS).replace(/-+$/, '')
 }
 
 /**
  * Render a learning as its entry key plus full entry content. The
- * frontmatter shape is fixed by PS-120/KTD8 and is deliberately free of
+ * frontmatter shape is fixed by PS-120 and is deliberately free of
  * anything time- or session-varying so equal learnings dedupe.
  */
 export function renderLearningEntry(

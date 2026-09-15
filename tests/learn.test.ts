@@ -1,6 +1,6 @@
 /**
- * Learning capture tests (suite U7): distillation types learnings into the
- * KTD8 taxonomy, capture renders them as `memory/<type>/<slug>.md` entries
+ * Learning capture tests (PS-120): distillation types learnings into the
+ * memory taxonomy, capture renders them as `memory/<type>/<slug>.md` entries
  * with PS-120 frontmatter, the secret scan refuses credential-shaped
  * content before it can be written, identical content dedupes through the
  * manifest hash, and a learned entry written through capture is recallable
@@ -181,7 +181,7 @@ const SESSION = [
 // ─── Distillation ───────────────────────────────────────────────────────
 
 describe('distillSession', () => {
-  test('types learnings into the KTD8 taxonomy', () => {
+  test('types learnings into the PS-120 memory taxonomy', () => {
     const learnings = distillSession(SESSION)
     const byType = new Map(learnings.map(l => [l.type, l]))
     expect(byType.get('user')?.body).toContain('pnpm')

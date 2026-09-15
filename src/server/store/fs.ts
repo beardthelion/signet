@@ -6,6 +6,7 @@
  * so a crash mid-write can't leave a half-written manifest.
  */
 
+import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { BlobStore } from './blob.ts'
@@ -42,7 +43,12 @@ export class FsBlobStore implements BlobStore {
   async put(path: string, bytes: Uint8Array): Promise<void> {
     const dest = this.full(path)
     await mkdir(dirname(dest), { recursive: true })
-    const tmp = join(dirname(dest), `.tmp-${process.pid}-${bytes.byteLength}-${path.length}`)
+    // The temp name must be unique per write: parallel puts to same-length
+    // paths with same-size bytes would otherwise collide on rename.
+    const tmp = join(
+      dirname(dest),
+      `.tmp-${process.pid}-${randomUUID()}-${bytes.byteLength}-${path.length}`,
+    )
     await writeFile(tmp, bytes)
     await rename(tmp, dest)
   }

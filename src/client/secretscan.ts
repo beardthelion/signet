@@ -15,7 +15,23 @@
  * (PASSPORT_SCAN): block (default), warn, or off.
  */
 
-export type ScanMode = 'block' | 'warn' | 'off'
+export const SCAN_MODES = ['block', 'warn', 'off'] as const
+export type ScanMode = (typeof SCAN_MODES)[number]
+
+/**
+ * The PASSPORT_SCAN value as a ScanMode. Invalid values throw rather than
+ * silently degrading to a weaker policy: a typo'd `block` must never
+ * behave like `warn`.
+ */
+export function scanModeFromEnv(raw: string | undefined = process.env.PASSPORT_SCAN): ScanMode {
+  const mode = raw ?? 'block'
+  if (!(SCAN_MODES as readonly string[]).includes(mode)) {
+    throw new Error(
+      `invalid PASSPORT_SCAN ${JSON.stringify(mode)}: expected one of ${SCAN_MODES.join(', ')}`,
+    )
+  }
+  return mode as ScanMode
+}
 
 export type Finding = {
   /** entry key the secret was found in */

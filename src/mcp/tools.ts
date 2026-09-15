@@ -25,6 +25,7 @@
 
 import type { PullResult, PushResult } from '../client/client.ts'
 import {
+  MANIFEST_ENTRY_KEY,
   PassportDecryptError,
   PassportHttpError,
   PassportIntegrityError,
@@ -32,7 +33,7 @@ import {
   PassportTimeoutError,
 } from '../client/client.ts'
 import { SecretFoundError } from '../client/secretscan.ts'
-import { EntryKey, Grant, isDeniedConfigKey } from '../types/index.ts'
+import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
 import { rankEntries } from './relevance.ts'
 
 export type ToolResult = { text: string; isError?: boolean }
@@ -47,6 +48,11 @@ export type PassportToolClient = {
   pull(): Promise<PullResult>
   hashes(): Promise<Record<string, string>>
   readEntry(entryKey: string): Promise<string | null>
+  /**
+   * Pull + decrypt only one section's entries against the verified manifest.
+   * Optional: clients without it fall back to a full pull filtered locally.
+   */
+  pullSection?(section: Section): Promise<Record<string, string>>
   readonly namespace: string
 }
 
@@ -63,9 +69,6 @@ export type ToolOptions = {
 
 const ok = (text: string): ToolResult => ({ text })
 const fail = (text: string): ToolResult => ({ text, isError: true })
-
-/** The client-managed manifest entry is never user content. */
-const MANIFEST_KEY = 'identity/manifest.json'
 
 /**
  * What text the STORE chose is allowed to put into a model's context.
@@ -160,9 +163,8 @@ function keyError(key: string): string | null {
  * must be a single flat segment: a nested grants/a/b.json would be a second,
  * shadow vocabulary for grant identity.
  */
-const GRANT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 function grantEntryKey(id: string): string | null {
-  if (!GRANT_ID.test(id)) return null
+  if (!isKeySegment(id)) return null
   const key = `grants/${id}.json`
   return EntryKey.safeParse(key).success ? key : null
 }
@@ -176,8 +178,20 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
   const pullUserEntries = async (): Promise<Record<string, string>> => {
     const { entries } = await client.pull()
     const out: Record<string, string> = {}
-    for (const [k, v] of Object.entries(entries)) if (k !== MANIFEST_KEY) out[k] = v
+    for (const [k, v] of Object.entries(entries)) if (k !== MANIFEST_ENTRY_KEY) out[k] = v
     return out
+  }
+
+  /**
+   * One section's plaintext entries. Uses the client's section-scoped pull
+   * when it has one so grant_list/config_get don't download the whole
+   * passport; otherwise a full pull filtered locally — identical results.
+   */
+  const pullSectionEntries = async (section: Section): Promise<Record<string, string>> => {
+    if (client.pullSection) return client.pullSection(section)
+    const entries = await pullUserEntries()
+    const prefix = `${section}/`
+    return Object.fromEntries(Object.entries(entries).filter(([k]) => k.startsWith(prefix)))
   }
 
   return {
@@ -235,7 +249,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
     },
 
     /** List entry keys (no content downloaded). `section` narrows to one. */
-    async list(section?: string): Promise<ToolResult> {
+    async list(section?: Section): Promise<ToolResult> {
       try {
         const hashes = await client.hashes()
         let keys = Object.keys(hashes).sort()
@@ -255,7 +269,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
 
     /**
      * Delete one entry. Destructive: the key must be named explicitly and
-     * must be a valid entry key. identity/ keys are refused.
+     * must be a valid entry key. identity/ and grants/ keys are refused.
      */
     async delete(key: string): Promise<ToolResult> {
       const bad = keyError(key)
@@ -264,6 +278,11 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
       if (section === 'identity') {
         return fail(
           `Refused to delete "${key}": identity material is client-managed and deleting it would corrupt the passport's root of trust.`,
+        )
+      }
+      if (section === 'grants') {
+        return fail(
+          `Refused to delete "${key}": grants are written only through passport_grant_record, and that tool never deletes (PS-062). A grant record cannot be removed through this tool.`,
         )
       }
       try {
@@ -292,10 +311,8 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
           if (content === null) return ok(`(no config entry "${bounded(key, 120)}" is stored)`)
           return ok(`config/${key}:\n${content}`)
         }
-        const entries = await pullUserEntries()
-        const config = Object.entries(entries)
-          .filter(([k]) => k.startsWith('config/'))
-          .sort(([a], [b]) => (a < b ? -1 : 1))
+        const entries = await pullSectionEntries('config')
+        const config = Object.entries(entries).sort(([a], [b]) => (a < b ? -1 : 1))
         if (config.length === 0) return ok('(no config entries stored)')
         const body = config.map(([k, v]) => `### ${k}\n${v.trim()}`).join('\n\n')
         return ok(`${config.length} config entr${config.length === 1 ? 'y' : 'ies'}:\n\n${body}`)
@@ -329,10 +346,8 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
     /** Read-only enumeration of recorded grants (PS-060/061). */
     async grantList(): Promise<ToolResult> {
       try {
-        const entries = await pullUserEntries()
-        const grants = Object.entries(entries)
-          .filter(([k]) => k.startsWith('grants/'))
-          .sort(([a], [b]) => (a < b ? -1 : 1))
+        const entries = await pullSectionEntries('grants')
+        const grants = Object.entries(entries).sort(([a], [b]) => (a < b ? -1 : 1))
         if (grants.length === 0) return ok('(no grants recorded)')
         const lines = grants.map(([k, v]) => {
           let parsedJson: unknown

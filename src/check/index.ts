@@ -34,12 +34,6 @@ import {
   type ReportResult,
 } from './report.ts'
 
-/** The passphrase every checker-provisioned passport uses — defined in
- *  clauses.ts, imported here, re-exported for fixtures. Constant on purpose:
- *  it is a harness secret inside this process, and a constant keeps report
- *  details deterministic. */
-export { CHECK_PASSPHRASE }
-
 // ─── Target model ───────────────────────────────────────────────────────
 
 /** Raw access to everything the store persists — needed by the leak-boundary

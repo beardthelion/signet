@@ -14,11 +14,12 @@
  */
 
 import { createHash } from 'node:crypto'
-import { Manifest, type ManifestEntry } from '../types/index.ts'
+import { ContentHash, Manifest, type ManifestEntry } from '../types/index.ts'
 import { withLock } from './lock.ts'
-import { sha256Hex, validateEntryKey } from './namespace.ts'
+import { logJsonLine } from './log.ts'
+import { namespaceSlug, sha256Hex, validateEntryKey } from './namespace.ts'
 import { caps, checkProjectedCaps } from './quota.ts'
-import { blobPath, blobPrefix, getStore, manifestPath } from './store/blob.ts'
+import { blobPath, blobPrefix, type Erasure, getStore, manifestPath } from './store/blob.ts'
 
 /** Thrown when a namespace's manifest cannot be parsed. Surfaces as HTTP 503. */
 export class UnreadableManifestError extends Error {
@@ -65,7 +66,7 @@ export type UpsertResponse = {
   /** Manifest hash after this write — the base for the next delta. */
   base: string
   /** Whether this deployment's store actually erases on delete. */
-  erasure: 'erases' | 'retains'
+  erasure: Erasure
   accepted: string[]
   deleted: string[]
   skipped: { key: string; reason: string }[]
@@ -85,13 +86,14 @@ export function manifestHash(entryHashes: Record<string, string>): string {
 }
 
 /** The base a writer uses when the namespace does not exist yet. */
-export const EMPTY_BASE = manifestHash({})
+const EMPTY_BASE = manifestHash({})
 
 // ─── Manifest helpers ───────────────────────────────────────────────────
 
-async function readManifest(nsSlug: string): Promise<Manifest> {
+/** The namespace's manifest, or null when no manifest blob exists. */
+async function readManifest(nsSlug: string): Promise<Manifest | null> {
   const raw = await getStore().get(manifestPath(nsSlug))
-  if (!raw) return { entries: {} }
+  if (!raw) return null
   let parsed: unknown
   try {
     parsed = JSON.parse(new TextDecoder().decode(raw))
@@ -118,25 +120,17 @@ function hashesFrom(m: Manifest): Record<string, string> {
   return out
 }
 
-/** Whether the manifest blob is absent — the namespace was never written. */
-async function manifestExists(nsSlug: string): Promise<boolean> {
-  return (await getStore().get(manifestPath(nsSlug))) !== null
-}
-
 // ─── Read paths ─────────────────────────────────────────────────────────
 
 /** Manifest view: entry metadata, no ciphertext bodies. Null if never written. */
-export async function getManifest(
-  namespace: string,
-  nsSlug: string,
-): Promise<{
+export async function getManifest(namespace: string): Promise<{
   namespace: string
   base: string
-  erasure: string
+  erasure: Erasure
   entries: Record<string, ManifestEntry>
 } | null> {
-  if (!(await manifestExists(nsSlug))) return null
-  const m = await readManifest(nsSlug)
+  const m = await readManifest(namespaceSlug(namespace))
+  if (m === null) return null
   return {
     namespace,
     base: manifestHash(hashesFrom(m)),
@@ -151,9 +145,9 @@ export async function getManifest(
  * indistinguishable from an entry key to a client iterating it. Null if the
  * namespace was never written.
  */
-export async function getHashes(nsSlug: string): Promise<Record<string, string> | null> {
-  if (!(await manifestExists(nsSlug))) return null
-  return hashesFrom(await readManifest(nsSlug))
+export async function getHashes(namespace: string): Promise<Record<string, string> | null> {
+  const m = await readManifest(namespaceSlug(namespace))
+  return m === null ? null : hashesFrom(m)
 }
 
 export type EntryRead =
@@ -171,12 +165,12 @@ export type EntryRead =
  * the manifest naming the key is evidence the entry exists, and answering
  * "not found" would tell a client the write never happened.
  */
-export async function getEntry(namespace: string, nsSlug: string, key: string): Promise<EntryRead> {
+export async function getEntry(namespace: string, key: string): Promise<EntryRead> {
+  const nsSlug = namespaceSlug(namespace)
   const m = await readManifest(nsSlug)
+  if (m === null) return { status: 'no_namespace' }
   const meta = m.entries[key]
-  if (!meta) {
-    return (await manifestExists(nsSlug)) ? { status: 'no_entry' } : { status: 'no_namespace' }
-  }
+  if (!meta) return { status: 'no_entry' }
   let bytes: Uint8Array | null = null
   try {
     bytes = await getStore().get(blobPath(nsSlug, meta.hash))
@@ -196,8 +190,8 @@ export async function getEntry(namespace: string, nsSlug: string, key: string): 
 }
 
 /** `?view=integrity`: the blob stored under `identity/manifest.json` (PS-040). */
-export function getIntegrityManifest(namespace: string, nsSlug: string): Promise<EntryRead> {
-  return getEntry(namespace, nsSlug, 'identity/manifest.json')
+export function getIntegrityManifest(namespace: string): Promise<EntryRead> {
+  return getEntry(namespace, 'identity/manifest.json')
 }
 
 // ─── Write path ─────────────────────────────────────────────────────────
@@ -221,7 +215,10 @@ export function parseUpsertBody(raw: unknown): UpsertRequest {
   }
   let base: string | null | undefined
   if (obj.base !== undefined) {
-    if (obj.base !== null && (typeof obj.base !== 'string' || !isBaseHash(obj.base))) {
+    if (
+      obj.base !== null &&
+      (typeof obj.base !== 'string' || !ContentHash.safeParse(obj.base).success)
+    ) {
       throw new Error('`base` must be a sha256:<hex> manifest hash or null')
     }
     base = obj.base
@@ -234,10 +231,6 @@ export function parseUpsertBody(raw: unknown): UpsertRequest {
     deletions = obj.deletions as string[]
   }
   return { entries: entries as Record<string, string>, deletions, base }
-}
-
-export function isBaseHash(v: string): boolean {
-  return /^sha256:[0-9a-f]{64}$/.test(v)
 }
 
 /**
@@ -255,13 +248,13 @@ export function isBaseHash(v: string): boolean {
  */
 export async function upsert(
   namespace: string,
-  nsSlug: string,
   req: UpsertRequest,
   nowIso: string,
 ): Promise<UpsertResponse> {
+  const nsSlug = namespaceSlug(namespace)
   return withLock(`ns:${nsSlug}`, async () => {
     const store = getStore()
-    const m = await readManifest(nsSlug)
+    const m = (await readManifest(nsSlug)) ?? { entries: {} }
 
     // The write precondition, checked before any projection. `base` is the
     // manifest hash the writer built from: a single digest, not a per-entry
@@ -334,7 +327,7 @@ export async function upsert(
       // leaves stale extras no reader can see. Either way the visible state
       // is consistent. Reclaim runs after the write is durable, because a
       // failure to collect garbage must not fail a write that already landed.
-      for (const w of blobWrites) await store.put(w.path, w.bytes)
+      await Promise.all(blobWrites.map(w => store.put(w.path, w.bytes)))
       await writeManifest(nsSlug, m)
 
       await reclaim(nsSlug, m)
@@ -374,9 +367,8 @@ async function reclaim(nsSlug: string, m: Manifest): Promise<void> {
     const store = getStore()
     const live = new Set<string>()
     for (const meta of Object.values(m.entries)) live.add(blobPath(nsSlug, meta.hash))
-    for (const path of await store.list(blobPrefix(nsSlug))) {
-      if (!live.has(path)) await store.delete(path)
-    }
+    const orphans = (await store.list(blobPrefix(nsSlug))).filter(p => !live.has(p))
+    await Promise.all(orphans.map(p => store.delete(p)))
   } catch (err) {
     // The slug is what makes this actionable: without it an operator only
     // knows collection failed somewhere. It is already every storage path's
@@ -397,7 +389,7 @@ async function reclaim(nsSlug: string, m: Manifest): Promise<void> {
  * of a namespace, already the directory name anyone reading the store sees.
  */
 function logEvent(fields: { event: string; nsSlug: string; reason: string }): void {
-  process.stderr.write(`${JSON.stringify({ timestamp: new Date().toISOString(), ...fields })}\n`)
+  logJsonLine(fields)
 }
 
 /** sha256:<hex> of raw ciphertext bytes — over ciphertext only, never plaintext. */
@@ -405,12 +397,24 @@ function sha256Prefixed(bytes: Uint8Array): string {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 }
 
+const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+/**
+ * Decode base64 without a re-encode validation pass. Accepts exactly what
+ * the old decode-then-re-encode check accepted: alphabet characters, then
+ * any run of trailing '=' padding, with the last data char of a partial
+ * group carrying no bits the decoder would silently drop.
+ */
 function decodeBase64(b64: string): Uint8Array | null {
+  const m = /^([A-Za-z0-9+/]*)=*$/.exec(b64)
+  if (!m) return null
+  const body = m[1]!
+  const rem = body.length % 4
+  if (rem === 1) return null
+  if (rem === 2 && B64_ALPHABET.indexOf(body[body.length - 1]!) % 16 !== 0) return null
+  if (rem === 3 && B64_ALPHABET.indexOf(body[body.length - 1]!) % 4 !== 0) return null
   try {
-    const buf = Buffer.from(b64, 'base64')
-    // Round-trip guard: reject input that isn't valid base64.
-    if (buf.toString('base64').replace(/=+$/, '') !== b64.replace(/=+$/, '')) return null
-    return new Uint8Array(buf)
+    return new Uint8Array(Buffer.from(b64, 'base64'))
   } catch {
     return null
   }

@@ -32,12 +32,8 @@ import {
   verifyAttestationChain,
   verifyDidSignature,
 } from './auth.ts'
-import {
-  InvalidNameError,
-  namespaceSlug,
-  validateEntryKey,
-  validateNamespace,
-} from './namespace.ts'
+import { logJsonLine } from './log.ts'
+import { InvalidNameError, validateEntryKey, validateNamespace } from './namespace.ts'
 import {
   type EntryRead,
   getEntry,
@@ -67,6 +63,12 @@ function json(body: unknown, status = 200, extraHeaders?: Record<string, string>
   })
 }
 
+/**
+ * Internal marker carrying a refusal's error code on the Response itself, so
+ * the rejection logger never has to clone and re-parse the body.
+ */
+const ERROR_CODE: unique symbol = Symbol('passport.errorCode')
+
 function apiError(
   code: string,
   message: string,
@@ -74,7 +76,13 @@ function apiError(
   details?: Record<string, unknown>,
   extraHeaders?: Record<string, string>,
 ) {
-  return json({ error: { code, message, ...(details ? { details } : {}) } }, status, extraHeaders)
+  const res = json(
+    { error: { code, message, ...(details ? { details } : {}) } },
+    status,
+    extraHeaders,
+  )
+  ;(res as unknown as Record<symbol, unknown>)[ERROR_CODE] = code
+  return res
 }
 
 const PASSPORT_PREFIX = '/passport/'
@@ -134,7 +142,7 @@ function logRejection(fields: {
   status: number
   route: string
 }): void {
-  process.stderr.write(`${JSON.stringify({ timestamp: new Date().toISOString(), ...fields })}\n`)
+  logJsonLine(fields)
 }
 
 /** Per-request facts the rejection log needs, filled in as they become known. */
@@ -150,14 +158,15 @@ export async function handleRequest(req: Request): Promise<Response> {
     res = apiError('internal', 'internal error', 500)
   }
   if (res.status >= 400) {
-    let code = 'unknown'
-    try {
-      const body = (await res.clone().json()) as { error?: { code?: string } }
-      if (body.error?.code) code = body.error.code
-    } catch {
-      // A refusal with a non-JSON body still gets a line; the code stays unknown.
-    }
-    logRejection({ owner: ctx.owner, code, status: res.status, route: ctx.route })
+    // The code rides on the response via ERROR_CODE; a >=400 response built
+    // outside apiError (there is none today) logs 'unknown', as before.
+    const marked = (res as unknown as Record<symbol, unknown>)[ERROR_CODE]
+    logRejection({
+      owner: ctx.owner,
+      code: typeof marked === 'string' ? marked : 'unknown',
+      status: res.status,
+      route: ctx.route,
+    })
   }
   return res
 }
@@ -213,7 +222,6 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
   if (!(await isAuthorizedDid(did, namespace))) {
     return apiError('forbidden', 'did is not authorized for this namespace', 403)
   }
-  const nsSlug = namespaceSlug(namespace)
 
   try {
     if (req.method === 'GET') {
@@ -225,19 +233,19 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
         } catch (err) {
           return apiError('invalid_key', (err as Error).message, 400)
         }
-        return entryResponse(await getEntry(namespace, nsSlug, parsed.entryKey))
+        return entryResponse(await getEntry(namespace, parsed.entryKey))
       }
       const view = url.searchParams.get('view')
       if (view === 'hashes') {
-        const hashes = await getHashes(nsSlug)
+        const hashes = await getHashes(namespace)
         if (hashes === null) return apiError('empty', 'no passport for this namespace yet', 404)
         return json(hashes)
       }
       if (view === 'integrity') {
-        return entryResponse(await getIntegrityManifest(namespace, nsSlug))
+        return entryResponse(await getIntegrityManifest(namespace))
       }
       if (view !== null) return apiError('bad_request', `unknown view "${view}"`, 400)
-      const manifest = await getManifest(namespace, nsSlug)
+      const manifest = await getManifest(namespace)
       if (manifest === null) return apiError('empty', 'no passport for this namespace yet', 404)
       return json(manifest)
     }
@@ -265,7 +273,7 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
         return apiError('bad_request', (err as Error).message, 400)
       }
       try {
-        return json(await upsert(namespace, nsSlug, parsedReq, new Date().toISOString()))
+        return json(await upsert(namespace, parsedReq, new Date().toISOString()))
       } catch (err) {
         const mapped = upsertFailure(err)
         if (mapped) return mapped
@@ -341,18 +349,16 @@ async function verify(req: Request): Promise<Response> {
     if (!Array.isArray(obj.attestations) || obj.attestations.length === 0) {
       return apiError('bad_request', '`attestations` must be a non-empty array', 400)
     }
-    const chain: RotationAttestation[] = []
-    for (const raw of obj.attestations) {
-      const parsed = RotationAttestation.safeParse(raw)
-      if (!parsed.success) {
-        return apiError('invalid_attestation', 'attestation failed schema validation', 401)
-      }
-      chain.push(parsed.data)
-    }
-    const genesis = chain[0].genesisDid
-    if (verifyAttestationChain(genesis, chain) !== did) {
+    // The chain verifier schema-validates every attestation itself; a
+    // malformed element fails closed inside it rather than being pre-parsed
+    // here. The declared genesis comes from the first attestation alone.
+    const first = RotationAttestation.safeParse(obj.attestations[0])
+    const genesis = first.success ? first.data.genesisDid : ''
+    if (verifyAttestationChain(genesis, obj.attestations) !== did) {
       return apiError('invalid_attestation', 'attestation chain does not authorize this DID', 401)
     }
+    // Verified, so every element parses; persist the normalized objects.
+    const chain = obj.attestations.map(item => RotationAttestation.parse(item))
     await persistAttestationChain(genesis, chain)
   }
 

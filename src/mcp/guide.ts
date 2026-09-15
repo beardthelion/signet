@@ -96,8 +96,3 @@ export const SHORT_INSTRUCTIONS =
   'in grants/, where passport_grant_record writes only holder-confirmed ' +
   'grants and no tool ever applies one. Call the "passport_guide" prompt for ' +
   'the full protocol.'
-
-/** The full guide text. A function so server.ts has a stable seam to call. */
-export function loadPassportGuide(): string {
-  return PASSPORT_GUIDE
-}

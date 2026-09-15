@@ -21,12 +21,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { PassportClient } from '../client/client.ts'
-import { loadCustody, saveCustody } from '../client/custody.ts'
-import { identityFromPkcs8, namespaceFor } from '../client/identity.ts'
-import type { ScanMode } from '../client/secretscan.ts'
+import { clientFromCustody, persistManifestSeq } from '../client/session.ts'
+import { DEFAULT_URL } from '../types/defaults.ts'
 import { GRANT_ACTIONS, SECTIONS } from '../types/index.ts'
-import { loadPassportGuide, SHORT_INSTRUCTIONS } from './guide.ts'
+import { PASSPORT_GUIDE, SHORT_INSTRUCTIONS } from './guide.ts'
 import { makeTools, type ToolResult } from './tools.ts'
 
 const toMcp = (r: ToolResult) => ({
@@ -42,36 +40,23 @@ const stderr = (line: string) => process.stderr.write(`passport mcp: ${line}\n`)
  * or signed, and a server that starts anyway would only fail on every call.
  */
 export async function main(): Promise<void> {
-  const url = process.env.PASSPORT_URL ?? 'http://localhost:8080'
-  const secrets = await loadCustody()
-  if (!secrets) {
-    stderr('no custody found — run `passport init` or `passport import` first')
-    process.exit(1)
-  }
-  const identity = identityFromPkcs8(Buffer.from(secrets.pkcs8, 'base64'))
-  const client = new PassportClient({
-    url,
-    identity,
-    genesisDid: secrets.genesisDid,
-    attestations: secrets.attestations,
-    // PASSPORT_PASSPHRASE overrides; otherwise the custody-held passphrase.
-    passphrase: process.env.PASSPORT_PASSPHRASE ?? secrets.passphrase,
-    scanMode: (process.env.PASSPORT_SCAN ?? 'block') as ScanMode,
-    lastSeq: secrets.manifestSeqs[namespaceFor(secrets.genesisDid)] ?? 0,
+  const wired = await clientFromCustody({
     // Scan warnings in warn mode must not hit stdout; this keeps them on the
     // diagnostics channel.
     onScanWarning: findings =>
       stderr(`${findings.length} potential secret(s) in pushed entries (scan mode warn)`),
   })
+  if (!wired) {
+    stderr('no custody found — run `passport init` or `passport import` first')
+    process.exit(1)
+  }
+  const { client, secrets } = wired
 
   const tools = makeTools(client, {
     holderDid: secrets.genesisDid,
     // Persist the manifest seq after every write so the next process still
     // rejects a rolled-back manifest (PS-041 state lives in custody).
-    onSync: async () => {
-      secrets.manifestSeqs[client.namespace] = client.manifestSeq
-      await saveCustody(secrets)
-    },
+    onSync: () => persistManifestSeq(client, secrets),
   })
 
   const server = new McpServer(
@@ -88,7 +73,7 @@ export async function main(): Promise<void> {
         'The passport-usage protocol: when to recall, what to save, how grants work as records, and how to wire the server without committing a secret. Read this once at the start of a session.',
     },
     () => ({
-      messages: [{ role: 'user', content: { type: 'text', text: loadPassportGuide() } }],
+      messages: [{ role: 'user', content: { type: 'text', text: PASSPORT_GUIDE } }],
     }),
   )
 
@@ -156,7 +141,7 @@ export async function main(): Promise<void> {
     {
       title: 'Delete a passport entry',
       description:
-        'Remove one entry. Destructive: the full entry key is required and identity/ keys are refused.',
+        'Remove one entry. Destructive: the full entry key is required and identity/ or grants/ keys are refused.',
       inputSchema: {
         key: z.string().describe('The exact entry key to delete, e.g. "memory/old-note.md".'),
       },
@@ -230,5 +215,5 @@ export async function main(): Promise<void> {
 
   const transport = new StdioServerTransport()
   await server.connect(transport)
-  stderr(`ready • url=${url} • namespace=${client.namespace}`)
+  stderr(`ready • url=${process.env.PASSPORT_URL ?? DEFAULT_URL} • namespace=${client.namespace}`)
 }

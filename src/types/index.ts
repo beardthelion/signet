@@ -14,6 +14,11 @@ export type Section = (typeof SECTIONS)[number]
 const segment = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const chunkSeq = /^[0-9]{6,}$/
 
+/** One path segment of an entry key (also a grants/<id> atom). */
+export function isKeySegment(s: string): boolean {
+  return segment.test(s)
+}
+
 /** An entry key is `<section>/<segments>`; sessions chunk as `sessions/<id>/<seq>`. */
 export const EntryKey = z
   .string()
@@ -29,9 +34,9 @@ export const EntryKey = z
       if (key.includes('\\') || key.includes('\0')) return false
       if (parts[0] === 'sessions') {
         if (parts.length !== 3) return false
-        return segment.test(parts[1]) && chunkSeq.test(parts[2])
+        return isKeySegment(parts[1]) && chunkSeq.test(parts[2])
       }
-      return parts.slice(1).every(p => segment.test(p))
+      return parts.slice(1).every(isKeySegment)
     },
     { message: 'invalid entry key' },
   )

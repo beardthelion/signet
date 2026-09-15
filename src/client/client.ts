@@ -30,8 +30,7 @@
  * stand up the wire contract in-process.
  */
 
-import { createHash } from 'node:crypto'
-import { EntryKey, type RotationAttestation, SignedManifest } from '../types/index.ts'
+import { EntryKey, type RotationAttestation, type Section, SignedManifest } from '../types/index.ts'
 import { ciphertextHash, decryptEntry, deriveKey, encryptEntry } from './crypto.ts'
 import {
   attestationHash,
@@ -41,6 +40,7 @@ import {
   generateIdentity,
   type Identity,
   namespaceFor,
+  sha256Hex,
   signMessage,
   verifyDidSignature,
 } from './identity.ts'
@@ -68,11 +68,7 @@ export function manifestHash(entryHashes: Record<string, string>): string {
     .sort()
     .map(k => `${k}\t${entryHashes[k]}`)
     .join('\n')
-  return `sha256:${sha256HexLocal(lines)}`
-}
-
-function sha256HexLocal(s: string): string {
-  return createHash('sha256').update(s).digest('hex')
+  return `sha256:${sha256Hex(lines)}`
 }
 
 /** A session chunk's entry key: `sessions/<id>/<zero-padded seq>` (PS-022). */
@@ -206,6 +202,8 @@ export class PassportClient {
   /** Derived once: the namespace is fixed for the life of this client. */
   private readonly encKey: Buffer
   private token: { value: string; expiresAt: number } | null = null
+  /** In-flight challenge/verify, so parallel requests share one auth round. */
+  private authInflight: Promise<void> | null = null
   /** PS-041 state: last verified seq and the manifest bytes it belonged to. */
   private lastSeq: number
   private lastManifestCanonical: string | null = null
@@ -255,7 +253,14 @@ export class PassportClient {
    * active key is a successor, so the server can re-root authorization at
    * the genesis DID (PS-052).
    */
-  private async authenticate(): Promise<void> {
+  private authenticate(): Promise<void> {
+    this.authInflight ??= this.doAuthenticate().finally(() => {
+      this.authInflight = null
+    })
+    return this.authInflight
+  }
+
+  private async doAuthenticate(): Promise<void> {
     const challenge = await this.rawRequest('POST', `${this.url}/auth/challenge`)
     if (!challenge.ok) throw httpError(challenge)
     const { nonce } = JSON.parse(challenge.raw) as { nonce?: string }
@@ -529,6 +534,7 @@ export class PassportClient {
     const baseSeq = remote?.seq ?? 0
 
     const deletions = (opts?.deletions ?? []).filter(k => k !== MANIFEST_ENTRY_KEY)
+    const deletionSet = new Set(deletions)
     const toUpload: Record<string, string> = {}
     const uploaded: string[] = []
     const unchanged: string[] = []
@@ -541,7 +547,7 @@ export class PassportClient {
     for (const [entryKey, plaintext] of Object.entries(userEntries)) {
       const b64 = encryptEntry(this.encKey, entryKey, plaintext)
       const hash = ciphertextHash(b64)
-      if (!deletions.includes(entryKey) && serverHashes[entryKey] === hash) {
+      if (!deletionSet.has(entryKey) && serverHashes[entryKey] === hash) {
         unchanged.push(entryKey)
         continue
       }
@@ -591,6 +597,49 @@ export class PassportClient {
   }
 
   /**
+   * Fetch + verify + decrypt one manifest-named entry. A blob the manifest
+   * does not name, or that fails GCM, is a hard error, never a silent skip.
+   */
+  private async fetchEntry(entryKey: string, expectedHash: string): Promise<string> {
+    const res = await this.request('GET', this.entryPath(entryKey))
+    if (!res.ok) throw httpError(res)
+    const body = JSON.parse(res.raw) as { entry?: unknown; hash?: unknown }
+    if (typeof body.entry !== 'string') {
+      throw new PassportIntegrityError(`passport: no blob in the response for "${entryKey}"`)
+    }
+    if (body.hash !== expectedHash || ciphertextHash(body.entry) !== expectedHash) {
+      throw new PassportIntegrityError(
+        `passport: ciphertext hash mismatch for "${entryKey}" — blob does not match the manifest`,
+      )
+    }
+    try {
+      return decryptEntry(this.encKey, entryKey, body.entry)
+    } catch (err) {
+      throw new PassportDecryptError(entryKey, (err as Error).message)
+    }
+  }
+
+  /**
+   * Fetch `keys` (a subset of the verified manifest's entries) in bounded
+   * parallel chunks, assembled into the result in manifest order.
+   */
+  private async fetchEntries(
+    manifestEntries: Record<string, string>,
+    keys: string[],
+  ): Promise<Record<string, string>> {
+    const entries: Record<string, string> = {}
+    const CHUNK = 8
+    for (let i = 0; i < keys.length; i += CHUNK) {
+      const chunk = keys.slice(i, i + CHUNK)
+      const plaintexts = await Promise.all(
+        chunk.map(entryKey => this.fetchEntry(entryKey, manifestEntries[entryKey]!)),
+      )
+      for (let j = 0; j < chunk.length; j++) entries[chunk[j]!] = plaintexts[j]!
+    }
+    return entries
+  }
+
+  /**
    * Pull + decrypt every entry. The signed manifest is verified first
    * (PS-041), then each blob's ciphertext hash is checked against it before
    * decryption — a blob the manifest does not name, or that fails GCM, is a
@@ -601,29 +650,31 @@ export class PassportClient {
     if (!remote) return { namespace: this.namespace, seq: 0, entries: {} }
     this.adoptManifest(remote)
 
-    const entries: Record<string, string> = {}
-    for (const [entryKey, expectedHash] of Object.entries(remote.signed.manifest.entries)) {
-      const res = await this.request('GET', this.entryPath(entryKey))
-      if (!res.ok) throw httpError(res)
-      const body = JSON.parse(res.raw) as { entry?: unknown; hash?: unknown }
-      if (typeof body.entry !== 'string') {
-        throw new PassportIntegrityError(`passport: no blob in the response for "${entryKey}"`)
-      }
-      if (body.hash !== expectedHash || ciphertextHash(body.entry) !== expectedHash) {
-        throw new PassportIntegrityError(
-          `passport: ciphertext hash mismatch for "${entryKey}" — blob does not match the manifest`,
-        )
-      }
-      try {
-        entries[entryKey] = decryptEntry(this.encKey, entryKey, body.entry)
-      } catch (err) {
-        throw new PassportDecryptError(entryKey, (err as Error).message)
-      }
-    }
+    const manifestEntries = remote.signed.manifest.entries
+    const entries = await this.fetchEntries(manifestEntries, Object.keys(manifestEntries))
     // The manifest itself is passport state too; expose it as an entry so a
     // pulled directory carries the complete document set.
     entries[MANIFEST_ENTRY_KEY] = remote.plaintext
     return { namespace: this.namespace, seq: remote.seq, entries }
+  }
+
+  /**
+   * Pull + decrypt only the entries under one section (the first key
+   * segment), with the same verification discipline as pull(): the signed
+   * manifest is verified once, then each fetched blob is hash-checked
+   * against it before decryption. Callers that need a single section (the
+   * MCP tools' config_get/grant_list) pay for that section's blobs rather
+   * than the whole passport.
+   */
+  async pullSection(section: Section): Promise<Record<string, string>> {
+    const remote = await this.remoteManifest()
+    if (!remote) return {}
+    this.adoptManifest(remote)
+
+    const manifestEntries = remote.signed.manifest.entries
+    const prefix = `${section}/`
+    const keys = Object.keys(manifestEntries).filter(k => k.startsWith(prefix))
+    return this.fetchEntries(manifestEntries, keys)
   }
 
   /**

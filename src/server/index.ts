@@ -17,16 +17,11 @@
  */
 
 import { readFileSync } from 'node:fs'
+import { DEFAULT_PORT } from '../types/defaults.ts'
+import { envInt } from './env.ts'
 import { handleRequest } from './handler.ts'
 import { caps } from './quota.ts'
 import { getStore } from './store/blob.ts'
-
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]
-  if (raw === undefined || raw.trim() === '') return fallback
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : fallback
-}
 
 function isLoopback(host: string): boolean {
   return host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.')
@@ -34,7 +29,7 @@ function isLoopback(host: string): boolean {
 
 const mode = (process.env.PASSPORT_MODE ?? 'local').trim().toLowerCase()
 const host = (process.env.PASSPORT_HOST ?? '127.0.0.1').trim()
-const port = envInt('PORT', 8788)
+const port = envInt('PORT', DEFAULT_PORT)
 const tlsCertPath = (process.env.PASSPORT_TLS_CERT ?? '').trim()
 const tlsKeyPath = (process.env.PASSPORT_TLS_KEY ?? '').trim()
 

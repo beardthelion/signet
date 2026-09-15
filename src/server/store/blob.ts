@@ -131,8 +131,3 @@ export function getStore(): BlobStore {
 export function setStore(store: BlobStore): void {
   cached = store
 }
-
-/** Drop any installed or memoized store so the next getStore() rebuilds. */
-export function resetStore(): void {
-  cached = null
-}

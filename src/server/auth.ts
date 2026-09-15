@@ -22,16 +22,10 @@
 import type { KeyObject } from 'node:crypto'
 import { createPublicKey, randomBytes, verify } from 'node:crypto'
 import { RotationAttestation } from '../types/index.ts'
+import { envInt } from './env.ts'
 import { withLock } from './lock.ts'
 import { genesisDid, namespaceForDid, namespaceSlug, sha256Hex } from './namespace.ts'
 import { attestationsPath, getStore } from './store/blob.ts'
-
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]
-  if (raw === undefined || raw.trim() === '') return fallback
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : fallback
-}
 
 // ─── Challenges (single-use, 120 s) ─────────────────────────────────────
 
@@ -39,7 +33,7 @@ const NONCE_TTL_MS = 120_000 // fixed by the wire contract, not a tunable
 const nonces = new Map<string, number>() // nonce -> expiresAt ms
 
 export function issueChallenge(now = Date.now()): { nonce: string; expiresAt: string } {
-  sweep(nonces, now)
+  sweepExpired(nonces, now)
   const nonce = randomBytes(32).toString('base64url')
   nonces.set(nonce, now + NONCE_TTL_MS)
   return { nonce, expiresAt: new Date(now + NONCE_TTL_MS).toISOString() }
@@ -63,7 +57,7 @@ const TOKEN_TTL_MS = envInt('PASSPORT_TOKEN_TTL_SEC', 600) * 1000
 const tokens = new Map<string, { did: string; expiresAt: number }>()
 
 export function issueToken(did: string, now = Date.now()): { token: string; expiresAt: string } {
-  sweepTokens(now)
+  sweepExpired(tokens, now)
   const token = randomBytes(32).toString('base64url')
   tokens.set(token, { did, expiresAt: now + TOKEN_TTL_MS })
   return { token, expiresAt: new Date(now + TOKEN_TTL_MS).toISOString() }
@@ -83,14 +77,18 @@ export function resolveBearer(req: Request, now = Date.now()): string | null {
   return t.did
 }
 
-function sweep(map: Map<string, number>, now: number): void {
+/**
+ * Drop expired entries once a map is large enough that the sweep pays for
+ * itself. Values are either a bare expiresAt or an object carrying one.
+ */
+function sweepExpired<V extends number | { expiresAt: number }>(
+  map: Map<string, V>,
+  now: number,
+): void {
   if (map.size < 10_000) return
-  for (const [k, exp] of map) if (exp <= now) map.delete(k)
-}
-
-function sweepTokens(now: number): void {
-  if (tokens.size < 10_000) return
-  for (const [k, t] of tokens) if (t.expiresAt <= now) tokens.delete(k)
+  for (const [k, v] of map) {
+    if ((typeof v === 'number' ? v : v.expiresAt) <= now) map.delete(k)
+  }
 }
 
 // ─── did:key -> Ed25519 public key ──────────────────────────────────────
@@ -134,11 +132,15 @@ export function publicKeyFromDid(did: string): KeyObject | null {
   const bytes = base58btcDecode(m[1])
   if (bytes?.length !== 34) return null
   if (bytes[0] !== ED25519_MULTICODEC[0] || bytes[1] !== ED25519_MULTICODEC[1]) return null
-  return createPublicKey({
-    key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(bytes.subarray(2))]),
-    format: 'der',
-    type: 'spki',
-  })
+  try {
+    return createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(bytes.subarray(2))]),
+      format: 'der',
+      type: 'spki',
+    })
+  } catch {
+    return null
+  }
 }
 
 /** Verify an Ed25519 signature (base64) over `message` against a did:key. */

@@ -86,6 +86,8 @@ const unsupported = (detail: string): ClauseResult => ({ status: 'unsupported', 
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64')
 const nsPath = (ns: string, suffix = '') => `/passport/${encodeURIComponent(ns)}${suffix}`
+const entryPath = (ns: string, key: string) =>
+  `${nsPath(ns)}/${key.split('/').map(encodeURIComponent).join('/')}`
 
 const VECTORS = new URL('../../spec/vectors/', import.meta.url)
 const loadVector = (name: string): Record<string, unknown> =>
@@ -573,7 +575,7 @@ const checkAltCipher: CheckFn = async ctx => {
   const hashes = (await hashesView(ctx, s)) ?? {}
   if (Object.keys(hashes).length === 0) problems.push('no entries to inspect')
   for (const key of Object.keys(hashes)) {
-    const path = `${nsPath(s.namespace)}/${key.split('/').map(encodeURIComponent).join('/')}`
+    const path = entryPath(s.namespace, key)
     const res = await ctx.wire('GET', path, { token: s.token })
     const body = (await res.json().catch(() => ({}))) as { entry?: string }
     if (res.status !== 200 || typeof body.entry !== 'string') {
@@ -1045,7 +1047,7 @@ const checkDeltaSync: CheckFn = async ctx => {
     if (!/^sha256:[0-9a-f]{64}$/.test(hash)) {
       problems.push(`hashes view carries a non-digest value for ${key}`)
     }
-    const path = `${nsPath(s.namespace)}/${key.split('/').map(encodeURIComponent).join('/')}`
+    const path = entryPath(s.namespace, key)
     const res = await ctx.wire('GET', path, { token: s.token })
     const body = (await res.json().catch(() => ({}))) as { entry?: string; hash?: string }
     if (res.status !== 200 || body.hash !== hash || ciphertextHash(body.entry ?? '') !== hash) {
@@ -1171,7 +1173,7 @@ const checkNamespaceLock: CheckFn = async ctx => {
   }
   // The manifest that survives must be consistent: every key fetchable.
   for (const key of Object.keys(hashes)) {
-    const path = `${nsPath(ns)}/${key.split('/').map(encodeURIComponent).join('/')}`
+    const path = entryPath(ns, key)
     const got = await ctx.wire('GET', path, { token })
     if (got.status !== 200) problems.push(`committed entry ${key} is unreadable`)
   }

@@ -42,9 +42,10 @@ import {
   loadCustody,
   saveCustody,
 } from '../src/client/custody.ts'
-import { generateIdentity, identityFromPkcs8, namespaceFor } from '../src/client/identity.ts'
-import type { ScanMode } from '../src/client/secretscan.ts'
+import { generateIdentity, namespaceFor } from '../src/client/identity.ts'
+import { clientFromCustody, persistManifestSeq } from '../src/client/session.ts'
 import { captureSession } from '../src/learn/capture.ts'
+import { DEFAULT_URL } from '../src/types/defaults.ts'
 import { SECTIONS } from '../src/types/index.ts'
 
 const SECTION_SET: ReadonlySet<string> = new Set(SECTIONS)
@@ -66,15 +67,20 @@ async function* walk(dir: string, prefix = ''): AsyncGenerator<string> {
  * entries; anything else is reported and skipped, not silently uploaded.
  */
 async function readPassportDir(dir: string): Promise<Record<string, string>> {
-  const entries: Record<string, string> = {}
+  const wanted: string[] = []
   const skipped: string[] = []
   for await (const rel of walk(dir)) {
-    const section = rel.split('/')[0]!
-    if (!SECTION_SET.has(section)) {
-      skipped.push(rel)
-      continue
-    }
-    entries[rel] = await readFile(join(dir, ...rel.split('/')), 'utf8')
+    if (!SECTION_SET.has(rel.split('/')[0]!)) skipped.push(rel)
+    else wanted.push(rel)
+  }
+  const entries: Record<string, string> = {}
+  const CHUNK = 8
+  for (let i = 0; i < wanted.length; i += CHUNK) {
+    const batch = wanted.slice(i, i + CHUNK)
+    const contents = await Promise.all(
+      batch.map(rel => readFile(join(dir, ...rel.split('/')), 'utf8')),
+    )
+    for (let j = 0; j < batch.length; j++) entries[batch[j]!] = contents[j]!
   }
   if (skipped.length) {
     console.error(`note: skipped non-section files: ${skipped.join(', ')}`)
@@ -85,28 +91,16 @@ async function readPassportDir(dir: string): Promise<Record<string, string>> {
 // ─── Custody + client wiring ────────────────────────────────────────────
 
 async function makeClient(): Promise<{ client: PassportClient; secrets: CustodySecrets }> {
-  const secrets = await loadCustody()
-  if (!secrets) {
+  const wired = await clientFromCustody()
+  if (!wired) {
     throw new Error('no custody found — run `passport init` or `passport import` first')
   }
-  const identity = identityFromPkcs8(Buffer.from(secrets.pkcs8, 'base64'))
-  const client = new PassportClient({
-    url: process.env.PASSPORT_URL ?? 'http://localhost:8080',
-    identity,
-    genesisDid: secrets.genesisDid,
-    attestations: secrets.attestations,
-    // PASSPORT_PASSPHRASE overrides; otherwise the custody-held passphrase.
-    passphrase: process.env.PASSPORT_PASSPHRASE ?? secrets.passphrase,
-    scanMode: (process.env.PASSPORT_SCAN ?? 'block') as ScanMode,
-    lastSeq: secrets.manifestSeqs[namespaceFor(secrets.genesisDid)] ?? 0,
-  })
-  return { client, secrets }
+  return wired
 }
 
 /** Persist the manifest seq the client just verified/published (PS-041). */
 async function recordSeq(client: PassportClient, secrets: CustodySecrets): Promise<void> {
-  secrets.manifestSeqs[client.namespace] = client.manifestSeq
-  await saveCustody(secrets)
+  await persistManifestSeq(client, secrets)
 }
 
 /** The export passphrase: env first, a hidden prompt second. */
@@ -165,13 +159,13 @@ async function cmdInit(force: boolean): Promise<void> {
   await backend.save(secrets)
 
   const client = new PassportClient({
-    url: process.env.PASSPORT_URL ?? 'http://localhost:8080',
+    url: process.env.PASSPORT_URL ?? DEFAULT_URL,
     identity,
     passphrase,
   })
   try {
     await client.init()
-    console.log(`published passport to ${process.env.PASSPORT_URL ?? 'http://localhost:8080'}`)
+    console.log(`published passport to ${process.env.PASSPORT_URL ?? DEFAULT_URL}`)
   } catch (err) {
     console.error(
       `warning: custody is saved but the initial publish failed: ${(err as Error).message}\n` +

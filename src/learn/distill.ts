@@ -1,10 +1,10 @@
 /**
- * Distillation: raw session content -> typed learning candidates (suite U7;
- * SPEC section 6 / PS-120, plan KTD8).
+ * Distillation: raw session content -> typed learning candidates
+ * (SPEC section 6 / PS-120).
  *
  * The input is whatever a harness calls "the session": transcript text,
  * pulled `sessions/<id>/<seq>` chunks, or a file the holder points at. The
- * output uses the KTD8 memory taxonomy, which is also the first path
+ * output uses the PS-120 memory taxonomy, which is also the first path
  * segment of the entry key (`memory/<type>/<slug>.md`):
  *
  *   user      — holder preferences and standing facts about the user
@@ -19,11 +19,11 @@
  * MUST treat empty as "write nothing" — no entries, no manifest churn.
  */
 
-export const LEARNING_TYPES = ['user', 'feedback', 'project', 'reference'] as const
+const LEARNING_TYPES = ['user', 'feedback', 'project', 'reference'] as const
 export type LearningType = (typeof LEARNING_TYPES)[number]
 
 export type Learning = {
-  /** KTD8 memory type; becomes the `memory/<type>/` segment and `type:` field. */
+  /** PS-120 memory type; becomes the `memory/<type>/` segment and `type:` field. */
   type: LearningType
   /** One-line summary; becomes the frontmatter `description:` and slug source. */
   title: string
