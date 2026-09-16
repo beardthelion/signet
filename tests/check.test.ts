@@ -1,5 +1,5 @@
 /**
- * passport-check tests — the checker's own conformance proof.
+ * signet-check tests - the checker's own conformance proof.
  *
  * The heavy runs go through spawned CLI processes rather than in-process
  * localTarget() calls on purpose: tests/setup.ts freezes tiny storage caps
@@ -8,7 +8,7 @@
  * with workable caps, which also exercises the real `bun run` entrypoint.
  *
  * In-process runs target the fault-injecting stub (tests/fixtures/), which
- * needs no server modules at all — each fault flag must make the checker
+ * needs no server modules at all - each fault flag must make the checker
  * fail exactly the clauses that fault violates, and nothing else.
  */
 
@@ -41,7 +41,7 @@ describe('registry agreement', () => {
     const ids = new Set<string>()
     const names = new Set<string>()
     for (const clause of registry.clauses) {
-      expect(clause.id).toMatch(/^PS-[0-9]{3}$/)
+      expect(clause.id).toMatch(/^SN-[0-9]{3}$/)
       expect(ids.has(clause.id)).toBe(false)
       ids.add(clause.id)
       names.add(clause.check)
@@ -61,7 +61,7 @@ describe('the checker against a conformant stub', () => {
     const report = await runCheck(makeStubTarget())
     expect(validateReport(report)).toEqual([])
     expect(failedClauses(report)).toEqual([])
-    expect(unsupportedClauses(report).sort()).toEqual(['PS-091', 'PS-092'])
+    expect(unsupportedClauses(report).sort()).toEqual(['SN-091', 'SN-092'])
   }, 120_000)
 
   test('the report is byte-identical across runs', async () => {
@@ -73,13 +73,13 @@ describe('the checker against a conformant stub', () => {
 
 describe('fault stubs fail exactly the violated clauses', () => {
   const cases: { faults: StubFaults; expected: string[] }[] = [
-    { faults: { skipAuth: true }, expected: ['PS-090'] },
-    { faults: { acceptStaleBase: true }, expected: ['PS-081'] },
-    { faults: { allowTraversal: true }, expected: ['PS-021'] },
-    { faults: { leakAccessLog: true }, expected: ['PS-034'] },
+    { faults: { skipAuth: true }, expected: ['SN-090'] },
+    { faults: { acceptStaleBase: true }, expected: ['SN-081'] },
+    { faults: { allowTraversal: true }, expected: ['SN-021'] },
+    { faults: { leakAccessLog: true }, expected: ['SN-034'] },
     // Trusting any chain breaks both the verify-time rejection rules
-    // (PS-051) and the authorization that follows from them (PS-052).
-    { faults: { trustAnyChain: true }, expected: ['PS-051', 'PS-052'] },
+    // (SN-051) and the authorization that follows from them (SN-052).
+    { faults: { trustAnyChain: true }, expected: ['SN-051', 'SN-052'] },
   ]
   for (const { faults, expected } of cases) {
     test(`${JSON.stringify(faults)} fails ${expected.join(', ')}`, async () => {
@@ -92,25 +92,25 @@ describe('fault stubs fail exactly the violated clauses', () => {
 
 describe('report shape', () => {
   test('a well-formed report validates; tampered reports do not', () => {
-    const good = buildReport('passport-spec/0.1', 'stub', [
-      { clause: 'PS-001', status: 'pass' },
-      { clause: 'PS-090', status: 'fail', detail: 'x' },
-      { clause: 'PS-091', status: 'unsupported', detail: 'y' },
+    const good = buildReport('signet-spec/0.1', 'stub', [
+      { clause: 'SN-001', status: 'pass' },
+      { clause: 'SN-090', status: 'fail', detail: 'x' },
+      { clause: 'SN-091', status: 'unsupported', detail: 'y' },
     ])
     expect(validateReport(good)).toEqual([])
-    expect(good.results.map(r => r.clause)).toEqual(['PS-001', 'PS-090', 'PS-091'])
+    expect(good.results.map(r => r.clause)).toEqual(['SN-001', 'SN-090', 'SN-091'])
     expect(good.summary).toEqual({ pass: 1, fail: 1, unsupported: 1 })
 
     expect(validateReport(null)).not.toEqual([])
     expect(
-      validateReport({ ...good, results: [{ clause: 'PS-001', status: 'green' }], extra: 1 }),
+      validateReport({ ...good, results: [{ clause: 'SN-001', status: 'green' }], extra: 1 }),
     ).not.toEqual([])
     expect(
       validateReport({
         ...good,
         results: [
-          { clause: 'PS-090', status: 'pass' },
-          { clause: 'PS-001', status: 'pass' },
+          { clause: 'SN-090', status: 'pass' },
+          { clause: 'SN-001', status: 'pass' },
         ],
       }),
     ).not.toEqual([]) // out of order
@@ -123,21 +123,21 @@ describe('report shape', () => {
 // ─── Spawned end-to-end runs ────────────────────────────────────────────
 
 /** Env for a checker child process: fs store in a fresh dir, caps that fit
- *  real manifests but still let the PS-081 probes trip them cheaply. */
+ *  real manifests but still let the SN-081 probes trip them cheaply. */
 function childEnv(): Record<string, string> {
   return {
     ...process.env,
     STORE: 'fs',
-    PASSPORT_DATA_DIR: mkdtempSync(join(tmpdir(), 'passport-check-e2e-')),
-    PASSPORT_MODE: 'local',
-    PASSPORT_CAP_ENTRY: '4096',
-    PASSPORT_CAP_MEMORY: '8192',
-    PASSPORT_CAP_CONFIG: '8192',
-    PASSPORT_CAP_SESSIONS: '65536',
-    PASSPORT_CAP_GRANTS: '8192',
-    PASSPORT_CAP_IDENTITY: '65536',
-    PASSPORT_CAP_TOTAL: '262144',
-    PASSPORT_MAX_BODY_BYTES: '4194304',
+    SIGNET_DATA_DIR: mkdtempSync(join(tmpdir(), 'signet-check-e2e-')),
+    SIGNET_MODE: 'local',
+    SIGNET_CAP_ENTRY: '4096',
+    SIGNET_CAP_MEMORY: '8192',
+    SIGNET_CAP_CONFIG: '8192',
+    SIGNET_CAP_SESSIONS: '65536',
+    SIGNET_CAP_GRANTS: '8192',
+    SIGNET_CAP_IDENTITY: '65536',
+    SIGNET_CAP_TOTAL: '262144',
+    SIGNET_MAX_BODY_BYTES: '4194304',
   } as Record<string, string>
 }
 
@@ -145,7 +145,7 @@ async function runCli(
   args: string[],
   env: Record<string, string>,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn([BUN, 'run', 'bin/passport-check.ts', ...args], {
+  const proc = Bun.spawn([BUN, 'run', 'bin/signet-check.ts', ...args], {
     cwd: REPO,
     env,
     stdout: 'pipe',
@@ -160,13 +160,13 @@ async function runCli(
 }
 
 describe('the reference server end to end', () => {
-  test('passport-check --target local exits 0 with no failed clauses', async () => {
+  test('signet-check --target local exits 0 with no failed clauses', async () => {
     const { code, stdout, stderr } = await runCli(['--target', 'local'], childEnv())
     if (code !== 0) console.error(stderr)
     expect(code).toBe(0)
     const report = JSON.parse(stdout) as ConformanceReport
     expect(validateReport(report)).toEqual([])
-    expect(report.generatedBy).toBe('passport-check')
+    expect(report.generatedBy).toBe('signet-check')
     expect(report.target).toBe('local')
     expect(failedClauses(report)).toEqual([])
     // The local harness can reach everything: nothing is unsupported.
@@ -207,7 +207,7 @@ describe('the reference server end to end', () => {
       expect(code).toBe(1)
       const report = JSON.parse(stdout) as ConformanceReport
       expect(validateReport(report)).toEqual([])
-      const auth = report.results.find(r => r.clause === 'PS-090')
+      const auth = report.results.find(r => r.clause === 'SN-090')
       expect(auth?.status).toBe('fail')
     } finally {
       server.kill()

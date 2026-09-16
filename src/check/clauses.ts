@@ -1,12 +1,12 @@
 /**
- * One check function per PS-### clause in spec/clauses.json. The `checks`
+ * One check function per SN-### clause in spec/clauses.json. The `checks`
  * map at the bottom is the dispatch table the runner looks up by the
  * registry's `check` field; the registry agreement test keeps the two in
  * sync in both directions.
  *
  * Every check takes the same CheckContext: a wire boundary, an optional raw
- * store, and helpers that provision a real passport through the reference
- * client. Nothing here assumes the suite server — a target that answers the
+ * store, and helpers that provision a real signet through the reference
+ * client. Nothing here assumes the suite server - a target that answers the
  * wire contract differently simply fails the corresponding clause.
  *
  * Trust boundary notes:
@@ -15,7 +15,7 @@
  *     target-supplied text unsanitized (the runner also sanitizes).
  *   - Checks hold real secrets (a fixed test passphrase, fresh Ed25519
  *     keys). The passphrase is a constant so report details stay
- *     deterministic — it is a harness secret, never a fixture a target
+ *     deterministic - it is a harness secret, never a fixture a target
  *     could learn anything from.
  *   - Checks that cannot be exercised against a target (no store access, no
  *     process control) return `unsupported` with a note rather than fake a
@@ -30,11 +30,11 @@ import {
   didDocument,
   MANIFEST_ENTRY_KEY,
   manifestHash,
-  PassportClient,
-  PassportDecryptError,
-  PassportHttpError,
-  PassportIntegrityError,
-  PassportSkippedError,
+  SignetClient,
+  SignetDecryptError,
+  SignetHttpError,
+  SignetIntegrityError,
+  SignetSkippedError,
   sessionEntryKey,
 } from '../client/client.ts'
 import { ciphertextHash, decryptEntry, deriveKey, encryptEntry } from '../client/crypto.ts'
@@ -77,11 +77,11 @@ const signNonce = (key: Parameters<typeof signMessage>[0], nonce: string) =>
   signMessage(key, `${AUTH_PREIMAGE_PREFIX}${nonce}`)
 
 /**
- * The passphrase every checker-provisioned passport uses. Constant on
+ * The passphrase every checker-provisioned signet uses. Constant on
  * purpose: it is a harness secret inside this process, and a constant keeps
  * report details deterministic.
  */
-export const CHECK_PASSPHRASE = 'passport-check harness passphrase'
+export const CHECK_PASSPHRASE = 'signet-check harness passphrase'
 
 const pass = (detail?: string): ClauseResult => ({
   status: 'pass',
@@ -91,7 +91,7 @@ const fail = (detail: string): ClauseResult => ({ status: 'fail', detail })
 const unsupported = (detail: string): ClauseResult => ({ status: 'unsupported', detail })
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64')
-const nsPath = (ns: string, suffix = '') => `/passport/${encodeURIComponent(ns)}${suffix}`
+const nsPath = (ns: string, suffix = '') => `/signet/${encodeURIComponent(ns)}${suffix}`
 const entryPath = (ns: string, key: string) =>
   `${nsPath(ns)}/${key.split('/').map(encodeURIComponent).join('/')}`
 
@@ -107,15 +107,15 @@ async function hashesView(ctx: CheckContext, s: Session): Promise<Record<string,
   return (await res.json()) as Record<string, string>
 }
 
-/** Decode `passport:did_<method>_<id>` back to `did:<method>:<id>`. */
+/** Decode `signet:did_<method>_<id>` back to `did:<method>:<id>`. */
 function decodeGenesis(ns: string): string {
-  const enc = ns.slice('passport:'.length)
+  const enc = ns.slice('signet:'.length)
   const a = enc.indexOf('_')
   const b = enc.indexOf('_', a + 1)
   return `${enc.slice(0, a)}:${enc.slice(a + 1, b)}:${enc.slice(b + 1)}`
 }
 
-/** The canonical-JSON document an attestation signs (PS-051). */
+/** The canonical-JSON document an attestation signs (SN-051). */
 function attestationBody(att: {
   genesisDid: string
   newDid: string
@@ -135,9 +135,9 @@ function verdict(problems: string[], passDetail?: string): ClauseResult {
   return problems.length ? fail(problems.join('; ')) : pass(passDetail)
 }
 
-// ─── Identity (PS-001..012) ─────────────────────────────────────────────
+// ─── Identity (SN-001..012) ─────────────────────────────────────────────
 
-/** PS-001 — did:key (Ed25519, multibase z + base58btc(0xed01||pubkey)) is
+/** SN-001 - did:key (Ed25519, multibase z + base58btc(0xed01||pubkey)) is
  *  required: identities decode to Ed25519 keys, the wire authenticates a
  *  real did:key, and other DID shapes are refused at /auth/verify. */
 const checkDidKey: CheckFn = async ctx => {
@@ -179,11 +179,11 @@ const checkDidKey: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-002 — did:web is optional and MUST NOT be a namespace root. */
+/** SN-002 - did:web is optional and MUST NOT be a namespace root. */
 const checkDidWebOptional: CheckFn = async ctx => {
   const problems: string[] = []
   const token = await ctx.tokenFor(generateIdentity())
-  const res = await ctx.wire('GET', nsPath('passport:did_web_example.com'), { token })
+  const res = await ctx.wire('GET', nsPath('signet:did_web_example.com'), { token })
   if (res.status !== 400) {
     problems.push(`a did:web-rooted namespace answered ${res.status}, expected 400`)
   }
@@ -197,16 +197,16 @@ const checkDidWebOptional: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-010 — the namespace is derived from the genesis DID and never moves. */
+/** SN-010 - the namespace is derived from the genesis DID and never moves. */
 const checkGenesisBinding: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
-  if (s.namespace !== `passport:${s.identity.did.replaceAll(':', '_')}`) {
-    problems.push('namespace is not passport:<encoded genesis DID>')
+  if (s.namespace !== `signet:${s.identity.did.replaceAll(':', '_')}`) {
+    problems.push('namespace is not signet:<encoded genesis DID>')
   }
   // A second client rooted at the same genesis DID resolves the same
   // namespace; the binding is a function of the DID, not the active key.
-  const again = new PassportClient({
+  const again = new SignetClient({
     url: ctx.target.url,
     fetchFn: ctx.target.clientFetch,
     identity: generateIdentity(),
@@ -221,20 +221,20 @@ const checkGenesisBinding: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-011 — the namespace encoding is the DID with ':' -> '_': injective,
+/** SN-011 - the namespace encoding is the DID with ':' -> '_': injective,
  *  colon-free, and a raw-colon namespace is rejected by the grammar. */
 const checkNamespaceEncoding: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
-  const enc = s.namespace.slice('passport:'.length)
+  const enc = s.namespace.slice('signet:'.length)
   if (enc.includes(':')) problems.push('encoded namespace still contains a colon')
   if (decodeGenesis(s.namespace) !== s.identity.did) {
     problems.push('encoded namespace does not decode back to the genesis DID')
   }
   // Raw colons can never be a valid namespace: both the bare DID and a
   // colon-carrying lookalike must be rejected.
-  for (const raw of [s.identity.did, `passport:${s.identity.did}`]) {
-    const res = await ctx.wire('GET', `/passport/${raw}`, { token: s.token })
+  for (const raw of [s.identity.did, `signet:${s.identity.did}`]) {
+    const res = await ctx.wire('GET', `/signet/${raw}`, { token: s.token })
     if (res.status !== 400) {
       problems.push(`a colon-carrying namespace answered ${res.status}, expected 400`)
     }
@@ -242,22 +242,22 @@ const checkNamespaceEncoding: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-012 — namespaces outside ^passport:did_[a-z]+_[A-Za-z0-9._-]{1,240}$
+/** SN-012 - namespaces outside ^signet:did_[a-z]+_[A-Za-z0-9._-]{1,240}$
  *  are rejected before storage access. */
 const checkNamespaceGrammar: CheckFn = async ctx => {
   const problems: string[] = []
   const id = generateIdentity()
   const token = await ctx.tokenFor(id)
   const bad = [
-    'passport:',
-    'passport:did_key_',
-    'passport:did_KEY_x',
-    'passport:other_key_x',
-    `passport:did_key_${'a'.repeat(241)}`,
-    'ns:passport:did_key_x',
+    'signet:',
+    'signet:did_key_',
+    'signet:did_KEY_x',
+    'signet:other_key_x',
+    `signet:did_key_${'a'.repeat(241)}`,
+    'ns:signet:did_key_x',
   ]
   for (const ns of bad) {
-    const res = await ctx.wire('GET', `/passport/${encodeURIComponent(ns)}`, { token })
+    const res = await ctx.wire('GET', `/signet/${encodeURIComponent(ns)}`, { token })
     if (res.status !== 400) {
       problems.push(`malformed namespace answered ${res.status}, expected 400`)
     }
@@ -268,9 +268,9 @@ const checkNamespaceGrammar: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-// ─── Entry keys (PS-020..022) ───────────────────────────────────────────
+// ─── Entry keys (SN-020..022) ───────────────────────────────────────────
 
-/** PS-020 — entry keys are <section>/<segments> over the five sections. */
+/** SN-020 - entry keys are <section>/<segments> over the five sections. */
 const checkEntryKeyGrammar: CheckFn = async ctx => {
   const problems: string[] = []
   const id = generateIdentity()
@@ -301,7 +301,7 @@ const checkEntryKeyGrammar: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-021 — traversal, separators, backslash, and NUL are rejected before
+/** SN-021 - traversal, separators, backslash, and NUL are rejected before
  *  storage access, on both the read path and the write path. */
 const checkTraversalRejected: CheckFn = async ctx => {
   const problems: string[] = []
@@ -336,7 +336,7 @@ const checkTraversalRejected: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-022 — sessions chunk as sessions/<id>/<zero-padded seq>. */
+/** SN-022 - sessions chunk as sessions/<id>/<zero-padded seq>. */
 const checkSessionChunks: CheckFn = async ctx => {
   const problems: string[] = []
   if (sessionEntryKey('demo', 7) !== 'sessions/demo/000007') {
@@ -373,13 +373,13 @@ const checkSessionChunks: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-// ─── Envelope (PS-030..035) ─────────────────────────────────────────────
+// ─── Envelope (SN-030..035) ─────────────────────────────────────────────
 
-/** PS-030 — the wire/storage blob is base64([0x01|nonce12|tag16|ct]). */
+/** SN-030 - the wire/storage blob is base64([0x01|nonce12|tag16|ct]). */
 const checkBlobFormat: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
-  const plaintext = 'passport-check blob probe\n'
+  const plaintext = 'signet-check blob probe\n'
   await s.client.push({ 'memory/blob.md': plaintext })
   const res = await ctx.wire('GET', `${nsPath(s.namespace)}/memory/blob.md`, { token: s.token })
   const body = (await res.json()) as { entry?: string; hash?: string }
@@ -405,7 +405,7 @@ const checkBlobFormat: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-031 — scrypt(passphrase, sha256("passport-suite:"+ns), 32, N=2^15,r=8,p=1). */
+/** SN-031 - scrypt(passphrase, sha256("signet:"+ns), 32, N=2^15,r=8,p=1). */
 const checkKdf: CheckFn = async () => {
   const v = loadVector('crypto.json') as {
     passphrase: string
@@ -418,7 +418,7 @@ const checkKdf: CheckFn = async () => {
     : fail('derived key does not match the spec vector')
 }
 
-/** PS-032 — AES-256-GCM with the entry key as AAD: vectors decrypt, and a
+/** SN-032 - AES-256-GCM with the entry key as AAD: vectors decrypt, and a
  *  blob refuses to open under a different entry key or a different key. */
 const checkAead: CheckFn = async () => {
   const problems: string[] = []
@@ -453,7 +453,7 @@ const checkAead: CheckFn = async () => {
   return verdict(problems)
 }
 
-/** PS-033 — the nonce is deterministic: identical plaintext yields identical
+/** SN-033 - the nonce is deterministic: identical plaintext yields identical
  *  ciphertext, byte-equal to the spec vector. */
 const checkDeterministicNonce: CheckFn = async () => {
   const problems: string[] = []
@@ -476,7 +476,7 @@ const checkDeterministicNonce: CheckFn = async () => {
 }
 
 /**
- * PS-034 — the metadata leak boundary. Everything the store holds is
+ * SN-034 - the metadata leak boundary. Everything the store holds is
  * enumerated and must be exactly: a manifest of {key -> {hash,size,
  * updatedAt}}, content-addressed ciphertext blobs, and the rotation chain.
  * No object may contain the plaintext written, the passphrase, the signing
@@ -490,7 +490,7 @@ const checkLeakBoundary: CheckFn = async ctx => {
   const problems: string[] = []
   const store = ctx.target.store
   const s = await ctx.provision()
-  const marker = 'passport-check-canary-plaintext'
+  const marker = 'signet-check-canary-plaintext'
   await s.client.push({ 'memory/canary.md': `note body ${marker}\n` })
   const secondToken = await ctx.tokenFor(s.identity)
 
@@ -572,7 +572,7 @@ const checkLeakBoundary: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-035 — only version 0x01 (AES-256-GCM) and 0x02 (XChaCha20-Poly1305)
+/** SN-035 - only version 0x01 (AES-256-GCM) and 0x02 (XChaCha20-Poly1305)
  *  blobs may be served; nothing may invent a third cipher. */
 const checkAltCipher: CheckFn = async ctx => {
   const problems: string[] = []
@@ -596,7 +596,7 @@ const checkAltCipher: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-// ─── Integrity manifest (PS-040/041) ────────────────────────────────────
+// ─── Integrity manifest (SN-040/041) ────────────────────────────────────
 
 /** Fetch, decrypt, and schema-validate the signed integrity manifest. */
 async function pullIntegrityDoc(ctx: CheckContext, s: Session) {
@@ -613,7 +613,7 @@ async function pullIntegrityDoc(ctx: CheckContext, s: Session) {
   return SignedManifest.parse(JSON.parse(plaintext))
 }
 
-/** PS-040 — identity/manifest.json is a holder-signed {seq, specVersion,
+/** SN-040 - identity/manifest.json is a holder-signed {seq, specVersion,
  *  genesisDid, entries->sha256:} document, verified against the genesis key. */
 const checkManifestSignature: CheckFn = async ctx => {
   const problems: string[] = []
@@ -650,7 +650,7 @@ const checkManifestSignature: CheckFn = async ctx => {
 }
 
 /**
- * PS-041 — a consumer must fail closed on a tampered, unsigned, or
+ * SN-041 - a consumer must fail closed on a tampered, unsigned, or
  * rolled-back manifest. The checker injects forged manifests straight onto
  * the wire (PUT of a replacement identity/manifest.json) and requires the
  * reference client to refuse every one.
@@ -688,7 +688,7 @@ const checkManifestRollback: CheckFn = async ctx => {
       await s.client.pull()
       problems.push(`${label}: pull accepted a non-conformant manifest`)
     } catch (err) {
-      if (!(err instanceof PassportIntegrityError || err instanceof PassportDecryptError)) {
+      if (!(err instanceof SignetIntegrityError || err instanceof SignetDecryptError)) {
         problems.push(`${label}: pull failed with a non-integrity error`)
       }
     }
@@ -732,9 +732,9 @@ const checkManifestRollback: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-// ─── Rotation (PS-050..053) ─────────────────────────────────────────────
+// ─── Rotation (SN-050..053) ─────────────────────────────────────────────
 
-/** PS-050 — rotation records identity/rotations/<seq>.json in the passport. */
+/** SN-050 - rotation records identity/rotations/<seq>.json in the signet. */
 const checkRotationRecord: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
@@ -757,7 +757,7 @@ const checkRotationRecord: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-051 — attestation fields, chaining, and the spec vector itself. */
+/** SN-051 - attestation fields, chaining, and the spec vector itself. */
 const checkAttestationChain: CheckFn = async ctx => {
   const problems: string[] = []
   const v = loadVector('rotation.json') as {
@@ -784,7 +784,7 @@ const checkAttestationChain: CheckFn = async ctx => {
   // Live chain: a second rotation links prevHash to the first attestation.
   const s = await ctx.provision()
   const r1 = await s.client.rotate()
-  const second = new PassportClient({
+  const second = new SignetClient({
     url: ctx.target.url,
     fetchFn: ctx.target.clientFetch,
     identity: r1.successor,
@@ -831,7 +831,7 @@ const checkAttestationChain: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-052 — only the terminal DID of a valid chain is authorized; forged,
+/** SN-052 - only the terminal DID of a valid chain is authorized; forged,
  *  misordered, and superseded (mid-chain) keys are refused. */
 const checkSuccessorAuth: CheckFn = async ctx => {
   const problems: string[] = []
@@ -841,7 +841,7 @@ const checkSuccessorAuth: CheckFn = async ctx => {
   try {
     const token = await ctx.tokenFor(r1.successor, r1.chain)
     const res = await ctx.wire('GET', nsPath(s.namespace), { token })
-    if (res.status !== 200) problems.push('successor key could not read its passport')
+    if (res.status !== 200) problems.push('successor key could not read its signet')
   } catch {
     problems.push('successor key could not authenticate with its chain')
   }
@@ -867,7 +867,7 @@ const checkSuccessorAuth: CheckFn = async ctx => {
     problems.push(`a forged attestation chain answered ${forgedStatus}, expected 401`)
   }
   // Mid-chain: after a second rotation, the superseded successor loses access.
-  const second = new PassportClient({
+  const second = new SignetClient({
     url: ctx.target.url,
     fetchFn: ctx.target.clientFetch,
     identity: r1.successor,
@@ -886,7 +886,7 @@ const checkSuccessorAuth: CheckFn = async ctx => {
     problems.push('the terminal successor could not authenticate with the extended chain')
   } else {
     const res = await ctx.wire('GET', nsPath(s.namespace), { token: terminal })
-    if (res.status !== 200) problems.push('the terminal successor lost access to the passport')
+    if (res.status !== 200) problems.push('the terminal successor lost access to the signet')
   }
   const midToken = await ctx.tokenFor(r1.successor, r1.chain).catch(() => null)
   if (midToken === null) {
@@ -900,20 +900,20 @@ const checkSuccessorAuth: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-053 — post-rotation the namespace stays bound to the genesis DID; the
- *  successor cannot open the passport's data under its own DID. */
+/** SN-053 - post-rotation the namespace stays bound to the genesis DID; the
+ *  successor cannot open the signet's data under its own DID. */
 const checkRotationNamespace: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
   await s.client.push({ 'memory/m.md': 'stays put\n' })
   const r1 = await s.client.rotate()
   const token = await ctx.tokenFor(r1.successor, r1.chain)
-  // The successor's own namespace is a different (empty) passport.
+  // The successor's own namespace is a different (empty) signet.
   const own = await ctx.wire('GET', nsPath(namespaceFor(r1.successor.did)), { token })
   if (own.status === 200) {
     const body = (await own.json()) as { entries?: Record<string, unknown> }
     if (Object.keys(body.entries ?? {}).length !== 0) {
-      problems.push("the successor's own namespace serves the rotated passport's entries")
+      problems.push("the successor's own namespace serves the rotated signet's entries")
     }
   } else if (own.status !== 404) {
     problems.push(`successor-rooted namespace answered ${own.status}, expected 404 or empty`)
@@ -931,9 +931,9 @@ const checkRotationNamespace: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-// ─── Grants and config (PS-060..070) ────────────────────────────────────
+// ─── Grants and config (SN-060..070) ────────────────────────────────────
 
-/** PS-060 — grants carry the five defined action classes; anything else is
+/** SN-060 - grants carry the five defined action classes; anything else is
  *  refused by the record path. */
 const checkGrantVocabulary: CheckFn = async ctx => {
   const problems: string[] = []
@@ -963,7 +963,7 @@ const checkGrantVocabulary: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-061 — no tool applies grants; they port as records a consumer must
+/** SN-061 - no tool applies grants; they port as records a consumer must
  *  re-confirm. */
 const checkGrantNonApplication: CheckFn = async ctx => {
   const problems: string[] = []
@@ -990,7 +990,7 @@ const checkGrantNonApplication: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-062 — passport_grant_record is the only write path, and only for
+/** SN-062 - signet_grant_record is the only write path, and only for
  *  holder-confirmed grants. */
 const checkGrantRecord: CheckFn = async ctx => {
   const problems: string[] = []
@@ -1006,7 +1006,7 @@ const checkGrantRecord: CheckFn = async ctx => {
   })
   if (!explicit.isError) problems.push('confirmed:false was recorded anyway')
   const viaSave = await tools.save('grants/sneaky.json', '{"id":"x"}\n')
-  if (!viaSave.isError) problems.push('passport_save wrote under grants/ directly')
+  if (!viaSave.isError) problems.push('signet_save wrote under grants/ directly')
   const ok = await tools.grantRecord({ id: 'g1', action: 'fs.read', scope: '*', confirmed: true })
   if (ok.isError) problems.push('a confirmed grant was refused')
   const stored = await s.client.readEntry('grants/g1.json')
@@ -1014,7 +1014,7 @@ const checkGrantRecord: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-070 — permission-affecting keys are refused under config/. */
+/** SN-070 - permission-affecting keys are refused under config/. */
 const checkConfigDenylist: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
@@ -1036,7 +1036,7 @@ const checkConfigDenylist: CheckFn = async ctx => {
   const nested = await tools.configSet('app/SANDBOX-rules.json', '{}')
   if (!nested.isError) problems.push('a denylisted word nested in a path was stored')
   const viaSave = await tools.save('config/permissions.json', '{}')
-  if (!viaSave.isError) problems.push('passport_save routed around the config denylist')
+  if (!viaSave.isError) problems.push('signet_save routed around the config denylist')
   const okSet = await tools.configSet('appearance.json', '{"theme":"dark"}\n')
   if (okSet.isError) problems.push('a non-denylisted config key was refused')
   const got = await tools.configGet('appearance.json')
@@ -1044,9 +1044,9 @@ const checkConfigDenylist: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-// ─── Wire/storage (PS-080..082, 090..092) ───────────────────────────────
+// ─── Wire/storage (SN-080..082, 090..092) ───────────────────────────────
 
-/** PS-080 — manifest-plus-blobs storage with a bare {key: sha256} delta view. */
+/** SN-080 - manifest-plus-blobs storage with a bare {key: sha256} delta view. */
 const checkDeltaSync: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
@@ -1080,7 +1080,7 @@ const checkDeltaSync: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-081 — caps are all-or-nothing before any write; oversized entries are
+/** SN-081 - caps are all-or-nothing before any write; oversized entries are
  *  reported in `skipped`, never silently dropped; a stale base is a 409
  *  with no partial commit. */
 const checkCaps: CheckFn = async ctx => {
@@ -1100,7 +1100,7 @@ const checkCaps: CheckFn = async ctx => {
     }
   } catch (err) {
     if (
-      !(err instanceof PassportSkippedError) ||
+      !(err instanceof SignetSkippedError) ||
       !err.skipped.some(sk => sk.key === 'memory/too-big.md' && sk.reason === 'entry_too_large')
     ) {
       problems.push('an oversized entry was not reported through the skipped list')
@@ -1135,7 +1135,7 @@ const checkCaps: CheckFn = async ctx => {
       await s.client.push(flood)
       problems.push('an over-section-cap write was accepted')
     } catch (err) {
-      if (!(err instanceof PassportHttpError) || err.status !== 413) {
+      if (!(err instanceof SignetHttpError) || err.status !== 413) {
         problems.push('an over-section-cap write did not fail with 413')
       }
       const afterFlood = (await hashesView(ctx, s)) ?? {}
@@ -1150,7 +1150,7 @@ const checkCaps: CheckFn = async ctx => {
   return v.status === 'pass' && notes.length ? pass(notes.join('; ')) : v
 }
 
-/** PS-082 — the per-namespace lock serializes read-modify-write: two
+/** SN-082 - the per-namespace lock serializes read-modify-write: two
  *  concurrent PUTs on the same base cannot clobber the manifest. */
 const checkNamespaceLock: CheckFn = async ctx => {
   const problems: string[] = []
@@ -1178,7 +1178,7 @@ const checkNamespaceLock: CheckFn = async ctx => {
     if (!winner) problems.push('the winning concurrent write did not commit')
     if (loser) problems.push('the losing concurrent write committed anyway')
   } else if (statuses.join(',') === '200,200') {
-    // A store that serializes and re-reads may legitimately accept both —
+    // A store that serializes and re-reads may legitimately accept both -
     // but only if neither write was lost.
     if (!hasA || !hasB) problems.push('concurrent writes clobbered each other (lost update)')
   } else {
@@ -1193,7 +1193,7 @@ const checkNamespaceLock: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-090 — bearer auth bound to an authorized DID: 401 unauthenticated,
+/** SN-090 - bearer auth bound to an authorized DID: 401 unauthenticated,
  *  403 wrong DID, replayed nonces rejected. */
 const checkAuth: CheckFn = async ctx => {
   const problems: string[] = []
@@ -1239,13 +1239,13 @@ const checkAuth: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-091 — loopback default; non-loopback requires DID auth + TLS. */
+/** SN-091 - loopback default; non-loopback requires DID auth + TLS. */
 const checkBindPolicy: CheckFn = async ctx =>
   ctx.target.bindProbe
     ? ctx.target.bindProbe()
     : unsupported('bind policy is a process-startup property; not exercisable via this target')
 
-/** PS-092 — local mode: loopback only, operator owns all namespaces. */
+/** SN-092 - local mode: loopback only, operator owns all namespaces. */
 const checkLocalMode: CheckFn = async ctx =>
   ctx.target.localModeProbe
     ? ctx.target.localModeProbe()
@@ -1253,9 +1253,9 @@ const checkLocalMode: CheckFn = async ctx =>
         'local-mode bind policy is a process-startup property; not exercisable via this target',
       )
 
-// ─── Custody (PS-100..102) ──────────────────────────────────────────────
+// ─── Custody (SN-100..102) ──────────────────────────────────────────────
 
-/** PS-100 — the two secrets (passphrase + signing key) never leave the
+/** SN-100 - the two secrets (passphrase + signing key) never leave the
  *  client: no request across a full session carries either one. */
 const checkCustody: CheckFn = async ctx => {
   const problems: string[] = []
@@ -1268,7 +1268,7 @@ const checkCustody: CheckFn = async ctx => {
     return ctx.target.clientFetch(input, init)
   }) as typeof fetch
   const id = generateIdentity()
-  const client = new PassportClient({
+  const client = new SignetClient({
     url: ctx.target.url,
     fetchFn: recordingFetch,
     identity: id,
@@ -1292,11 +1292,11 @@ const checkCustody: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-101 — custody writes secrets only to a 0600 file outside any
+/** SN-101 - custody writes secrets only to a 0600 file outside any
  *  committable path. */
 const checkInitCustody: CheckFn = async () => {
   const problems: string[] = []
-  const dir = trackTmpDir(mkdtempSync(join(tmpdir(), 'passport-check-custody-')))
+  const dir = trackTmpDir(mkdtempSync(join(tmpdir(), 'signet-check-custody-')))
   const backend = new FileCustodyBackend(dir)
   const id = generateIdentity()
   const secrets: CustodySecrets = {
@@ -1322,7 +1322,7 @@ const checkInitCustody: CheckFn = async () => {
   return verdict(problems)
 }
 
-/** PS-102 — export produces an encrypted bundle carrying both secrets;
+/** SN-102 - export produces an encrypted bundle carrying both secrets;
  *  import restores custody; a wrong passphrase fails closed. */
 const checkExportImport: CheckFn = async () => {
   const problems: string[] = []
@@ -1359,9 +1359,9 @@ const checkExportImport: CheckFn = async () => {
   return verdict(problems)
 }
 
-// ─── Scanning + provenance (PS-110, PS-120) ─────────────────────────────
+// ─── Scanning + provenance (SN-110, SN-120) ─────────────────────────────
 
-/** PS-110 — every section is scanned for credential shapes before
+/** SN-110 - every section is scanned for credential shapes before
  *  encryption; lookalikes pass. */
 const checkSecretScan: CheckFn = async ctx => {
   const problems: string[] = []
@@ -1394,8 +1394,8 @@ const checkSecretScan: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-/** PS-120 — memory entries carry type:/provenance: frontmatter, and the
- *  spec-vector provenance marker round-trips through a real passport. */
+/** SN-120 - memory entries carry type:/provenance: frontmatter, and the
+ *  spec-vector provenance marker round-trips through a real signet. */
 const checkProvenance: CheckFn = async ctx => {
   const problems: string[] = []
   const v = loadVector('crypto.json') as {
@@ -1420,9 +1420,9 @@ const checkProvenance: CheckFn = async ctx => {
   return verdict(problems)
 }
 
-// ─── Vectors + MCP (PS-200, PS-201) ─────────────────────────────────────
+// ─── Vectors + MCP (SN-200, SN-201) ─────────────────────────────────────
 
-/** PS-200 — the suite reproduces every shared vector byte for byte:
+/** SN-200 - the suite reproduces every shared vector byte for byte:
  *  crypto, identity, rotation, and the signed manifest. */
 const checkCliVectors: CheckFn = async () => {
   const problems: string[] = []
@@ -1505,7 +1505,7 @@ const checkCliVectors: CheckFn = async () => {
   }
 
   // The manifest vector must be a SignedManifest wire object
-  // ({manifest, did, sig}) — the same shape identity/manifest.json carries.
+  // ({manifest, did, sig}) - the same shape identity/manifest.json carries.
   const manifestVector = SignedManifest.safeParse(loadVector('manifest.json'))
   if (!manifestVector.success) {
     problems.push('manifest vector does not parse as a SignedManifest')
@@ -1518,7 +1518,7 @@ const checkCliVectors: CheckFn = async () => {
   return verdict(problems)
 }
 
-/** PS-201 — a real write through the MCP tools layer recalls back over the
+/** SN-201 - a real write through the MCP tools layer recalls back over the
  *  wire path. */
 const checkMcpRecall: CheckFn = async ctx => {
   const problems: string[] = []
@@ -1528,21 +1528,21 @@ const checkMcpRecall: CheckFn = async ctx => {
     'memory/check-recall.md',
     'the widget service deploys to region sin via flyctl\n',
   )
-  if (saved.isError) problems.push('passport_save through the tools layer failed')
+  if (saved.isError) problems.push('signet_save through the tools layer failed')
   const recalled = await tools.recall('which region does the widget service deploy to')
   if (recalled.isError || !recalled.text.includes('memory/check-recall.md')) {
-    problems.push('passport_recall did not return the stored entry')
+    problems.push('signet_recall did not return the stored entry')
   }
   if (recalled.isError || !recalled.text.includes('sin')) {
-    problems.push('passport_recall did not return the stored content')
+    problems.push('signet_recall did not return the stored content')
   }
   const found = await tools.search('widget')
   if (found.isError || !found.text.includes('memory/check-recall.md')) {
-    problems.push('passport_search did not find the stored entry')
+    problems.push('signet_search did not find the stored entry')
   }
   const listed = await tools.list('memory')
   if (listed.isError || !listed.text.includes('memory/check-recall.md')) {
-    problems.push('passport_list did not show the stored entry')
+    problems.push('signet_list did not show the stored entry')
   }
   return verdict(problems)
 }

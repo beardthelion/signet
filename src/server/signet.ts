@@ -1,14 +1,14 @@
 /**
- * Passport repository operations — the heart of the store.
+ * Signet repository operations - the heart of the store.
  *
  * Reads/writes the per-namespace manifest + ciphertext entry blobs through
- * the BlobStore (PS-080). Implements the manifest view, the hashes view for
+ * the BlobStore (SN-080). Implements the manifest view, the hashes view for
  * delta sync, single-entry fetch, the integrity-manifest view, and delta
  * upsert. All values flowing through here are ciphertext; this module cannot
  * and does not decrypt anything.
  *
  * Concurrency note: writes to a single namespace are serialized with an
- * in-process async lock (PS-082) so two concurrent PUTs can't clobber each
+ * in-process async lock (SN-082) so two concurrent PUTs can't clobber each
  * other's read-modify-write. Correct for a single instance; a multi-instance
  * deployment moves the manifest behind a conditional write.
  */
@@ -47,7 +47,7 @@ export class StaleBaseError extends Error {
   }
 }
 
-/** PUT /passport/<ns> body (validated). */
+/** PUT /signet/<ns> body (validated). */
 export type UpsertRequest = {
   /** entryKey -> ciphertext (base64). Upsert semantics. */
   entries: Record<string, string>
@@ -56,14 +56,14 @@ export type UpsertRequest = {
   /**
    * The manifest hash the writer built from: `manifestHash` of the
    * ?view=hashes map the writer last saw, or null for "the namespace is
-   * empty". Optional — a request without it is accepted unconditionally.
+   * empty". Optional - a request without it is accepted unconditionally.
    */
   base?: string | null
 }
 
 export type UpsertResponse = {
   namespace: string
-  /** Manifest hash after this write — the base for the next delta. */
+  /** Manifest hash after this write - the base for the next delta. */
   base: string
   /** Whether this deployment's store actually erases on delete. */
   erasure: Erasure
@@ -140,7 +140,7 @@ export async function getManifest(namespace: string): Promise<{
 }
 
 /**
- * Hashes view: exactly `{entryKey: sha256-hash}` — the delta-sync contract of
+ * Hashes view: exactly `{entryKey: sha256-hash}` - the delta-sync contract of
  * SPEC §7.1. Kept as a bare map on purpose: any extra field would be
  * indistinguishable from an entry key to a client iterating it. Null if the
  * namespace was never written.
@@ -189,7 +189,7 @@ export async function getEntry(namespace: string, key: string): Promise<EntryRea
   }
 }
 
-/** `?view=integrity`: the blob stored under `identity/manifest.json` (PS-040). */
+/** `?view=integrity`: the blob stored under `identity/manifest.json` (SN-040). */
 export function getIntegrityManifest(namespace: string): Promise<EntryRead> {
   return getEntry(namespace, 'identity/manifest.json')
 }
@@ -235,16 +235,16 @@ export function parseUpsertBody(raw: unknown): UpsertRequest {
 
 /**
  * Apply a delta upsert. Each entry value is base64 ciphertext. We:
- *   - compare `base` to the live manifest hash first — stale base, 409, and
- *     NOTHING commits (PS-081)
+ *   - compare `base` to the live manifest hash first - stale base, 409, and
+ *     NOTHING commits (SN-081)
  *   - validate each key before it can touch a storage path, skip bad entries
  *   - skip writes whose ciphertext hash already matches (true delta)
- *   - project the resulting manifest in memory and enforce every cap —
+ *   - project the resulting manifest in memory and enforce every cap -
  *     per-section and namespace-total breaches fail the WHOLE write before
  *     any byte lands; an oversized entry alone is reported in `skipped`
  *   - commit blobs, then the manifest that publishes them
  *
- * Runs under the per-namespace lock so concurrent PUTs serialize (PS-082).
+ * Runs under the per-namespace lock so concurrent PUTs serialize (SN-082).
  */
 export async function upsert(
   namespace: string,
@@ -306,7 +306,7 @@ export async function upsert(
       }
       const hash = sha256Prefixed(bytes)
       if (m.entries[key]?.hash === hash) {
-        // Unchanged ciphertext — true delta, nothing to write.
+        // Unchanged ciphertext - true delta, nothing to write.
         accepted.push(key)
         continue
       }
@@ -319,7 +319,7 @@ export async function upsert(
     const mutated = touched.size > 0
     if (mutated) {
       // All-or-nothing: every cap is enforced against the projected manifest
-      // before a single byte is written (PS-081).
+      // before a single byte is written (SN-081).
       checkProjectedCaps(m.entries)
 
       // Blobs first, then the manifest that publishes them. A crash before
@@ -382,7 +382,7 @@ async function reclaim(nsSlug: string, m: Manifest): Promise<void> {
 }
 
 /**
- * One operational log line — not a request refusal. The field set is fixed
+ * One operational log line - not a request refusal. The field set is fixed
  * and small on purpose: on a crypto-blind server the space of things that
  * must never appear in a log (entry keys, raw namespaces, ciphertext, tokens)
  * is open-ended, so a fixed shape is the only safe one. The slug is a sha256
@@ -392,7 +392,7 @@ function logEvent(fields: { event: string; nsSlug: string; reason: string }): vo
   logJsonLine(fields)
 }
 
-/** sha256:<hex> of raw ciphertext bytes — over ciphertext only, never plaintext. */
+/** sha256:<hex> of raw ciphertext bytes - over ciphertext only, never plaintext. */
 function sha256Prefixed(bytes: Uint8Array): string {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 }

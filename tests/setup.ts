@@ -2,7 +2,7 @@
  * Test preload + shared helpers.
  *
  * The server modules freeze their env reads at import time, and bun shares
- * the module cache across all test files in one process — so the env must be
+ * the module cache across all test files in one process - so the env must be
  * set HERE, before any src module loads, or whichever test file imports first
  * wins. Using `??=` lets an individual env override still apply.
  *
@@ -21,22 +21,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.STORE ??= 'fs'
-process.env.PASSPORT_DATA_DIR ??= mkdtempSync(join(tmpdir(), 'passport-test-'))
-process.env.PASSPORT_MODE ??= 'local'
-process.env.PASSPORT_CAP_MEMORY ??= '1024'
-process.env.PASSPORT_CAP_CONFIG ??= '512'
-process.env.PASSPORT_CAP_SESSIONS ??= '4096'
-process.env.PASSPORT_CAP_GRANTS ??= '256'
-process.env.PASSPORT_CAP_IDENTITY ??= '512'
-process.env.PASSPORT_CAP_ENTRY ??= '1024'
-process.env.PASSPORT_CAP_TOTAL ??= '3000'
-process.env.PASSPORT_MAX_BODY_BYTES ??= '1048576'
+process.env.SIGNET_DATA_DIR ??= mkdtempSync(join(tmpdir(), 'signet-test-'))
+process.env.SIGNET_MODE ??= 'local'
+process.env.SIGNET_CAP_MEMORY ??= '1024'
+process.env.SIGNET_CAP_CONFIG ??= '512'
+process.env.SIGNET_CAP_SESSIONS ??= '4096'
+process.env.SIGNET_CAP_GRANTS ??= '256'
+process.env.SIGNET_CAP_IDENTITY ??= '512'
+process.env.SIGNET_CAP_ENTRY ??= '1024'
+process.env.SIGNET_CAP_TOTAL ??= '3000'
+process.env.SIGNET_MAX_BODY_BYTES ??= '1048576'
 
 // ─── did:key identities from fixed seeds ─────────────────────────────────
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 
-/** base58btc encode — the mirror of the decoder under test in auth.ts. */
+/** base58btc encode - the mirror of the decoder under test in auth.ts. */
 export function base58btc(bytes: Uint8Array): string {
   const digits = [0]
   for (const b of bytes) {
@@ -76,7 +76,7 @@ export type TestIdentity = {
 
 /** A deterministic Ed25519 identity: seed = sha256(label). */
 export function identity(label: string): TestIdentity {
-  const seed = createHash('sha256').update(`passport-test:${label}`).digest()
+  const seed = createHash('sha256').update(`signet-test:${label}`).digest()
   const priv = createPrivateKey({
     key: Buffer.concat([PKCS8_PREFIX, seed]),
     format: 'der',
@@ -85,16 +85,16 @@ export function identity(label: string): TestIdentity {
   const pub = createPublicKey(priv)
   const rawPub = pub.export({ format: 'der', type: 'spki' }).subarray(SPKI_PREFIX.length)
   const did = `did:key:${base58btc(Buffer.concat([Buffer.from([0xed, 0x01]), rawPub]))}`
-  return { label, did, namespace: `passport:${did.replaceAll(':', '_')}`, priv, rawPub }
+  return { label, did, namespace: `signet:${did.replaceAll(':', '_')}`, priv, rawPub }
 }
 
-/** Ed25519-sign a message, base64 result — the wire sig format. */
+/** Ed25519-sign a message, base64 result - the wire sig format. */
 export function signB64(priv: KeyObject, message: string | Uint8Array): string {
   return sign(null, Buffer.from(message), priv).toString('base64')
 }
 
-/** The /auth/verify preimage prefix (SPEC §7.1): sigs cover "passport-auth:"+nonce. */
-export const AUTH_PREFIX = 'passport-auth:'
+/** The /auth/verify preimage prefix (SPEC §7.1): sigs cover "signet-auth:"+nonce. */
+export const AUTH_PREFIX = 'signet-auth:'
 
 /** Sign a challenge nonce for /auth/verify under the domain-separated preimage. */
 export function signNonceB64(priv: KeyObject, nonce: string): string {
@@ -102,7 +102,7 @@ export function signNonceB64(priv: KeyObject, nonce: string): string {
 }
 
 /**
- * Canonical JSON for building attestations — deliberately reimplemented here
+ * Canonical JSON for building attestations - deliberately reimplemented here
  * rather than imported, so the test oracle stays independent of the code it
  * checks (it also matches scripts/gen-vectors.ts byte for byte).
  */
@@ -135,12 +135,12 @@ export function makeAttestation(
   return { ...body, sig: signB64(signer, canonicalJson(body)) }
 }
 
-/** sha256 hex of an attestation's canonical JSON — the next link's prevHash. */
+/** sha256 hex of an attestation's canonical JSON - the next link's prevHash. */
 export function attestationHash(att: TestAttestation): string {
   return createHash('sha256').update(canonicalJson(att)).digest('hex')
 }
 
-// ─── HTTP helpers (handleRequest injection — no socket) ──────────────────
+// ─── HTTP helpers (handleRequest injection - no socket) ──────────────────
 
 export async function post(path: string, body: unknown): Promise<Response> {
   const { handleRequest } = await import('../src/server/handler.ts')
@@ -210,9 +210,9 @@ export async function authed(
   )
 }
 
-/** /passport/<ns> path with the namespace URL-encoded. */
+/** /signet/<ns> path with the namespace URL-encoded. */
 export function nsPath(ns: string, suffix = ''): string {
-  return `/passport/${encodeURIComponent(ns)}${suffix}`
+  return `/signet/${encodeURIComponent(ns)}${suffix}`
 }
 
 /** A base64 "ciphertext" blob of roughly n bytes (content is opaque here). */

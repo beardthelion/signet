@@ -1,7 +1,7 @@
 /**
- * Secret-scan tests (PS-110).
+ * Secret-scan tests (SN-110).
  *
- * The scan runs on every entry's plaintext before encryption — session
+ * The scan runs on every entry's plaintext before encryption - session
  * chunks included. These tests pin both halves of the contract: credential-
  * shaped values are blocked, and plausible non-secret lookalikes pass.
  */
@@ -94,7 +94,7 @@ describe('enforce policy', () => {
     expect(enforce(dirty, 'off')).toEqual([])
   })
 
-  test('session chunks are scanned too (PS-110)', () => {
+  test('session chunks are scanned too (SN-110)', () => {
     const findings = scanEntries({
       'sessions/s/000001': 'xoxb-123456789012-abcdefghijkl',
     })
@@ -110,7 +110,7 @@ describe('scanModeFromEnv', () => {
   })
 
   test('an invalid value throws rather than degrading silently', () => {
-    expect(() => scanModeFromEnv('strictest')).toThrow(/invalid PASSPORT_SCAN/)
-    expect(() => scanModeFromEnv('')).toThrow(/invalid PASSPORT_SCAN/)
+    expect(() => scanModeFromEnv('strictest')).toThrow(/invalid SIGNET_SCAN/)
+    expect(() => scanModeFromEnv('')).toThrow(/invalid SIGNET_SCAN/)
   })
 })

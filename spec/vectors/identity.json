@@ -1,13 +1,13 @@
 {
-  "specVersion": "passport-spec/0.1",
-  "genesisSeedHex": "6903fb30ef078b4eb05eae11d9ee19786de1b9142af662fdf72540aea06ff1a0",
-  "genesisDid": "did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
-  "successorSeedHex": "198c2f21d2aabbd7e56d4918f6dea3809422632756d8284da0449765b5999a9e",
-  "successorDid": "did:key:z6MkjsHJ27VECNVM394DimiaZpUzitPHA63iRWLVhj4yxdnN",
-  "namespace": "passport:did_key_z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
+  "specVersion": "signet-spec/0.1",
+  "genesisSeedHex": "cf79521f68d6685ace33c0d68c3b90c8b101ba0a80e14a8b5dc284bf16383b4c",
+  "genesisDid": "did:key:z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq",
+  "successorSeedHex": "a6ecbcee4f8890b6df70c91e4dcd5801047c027b336a9142df87d25f07ccdd4b",
+  "successorDid": "did:key:z6MkeULKaFrJqwuT1iER1qwVVSHrvxMr6TdgbYCsE9Mm2f2v",
+  "namespace": "signet:did_key_z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq",
   "signMessage": "{\"proof\":\"did:key signs\"}",
-  "signature": "793VdfftO8SY72VpY69qtjZ8IcYroKnIDKaSasE71JBDvHTEfXMBRptfUnnA5FIa3gxtQ5qEeITr1oWEmdw5CQ==",
+  "signature": "pd1H5TPelWm7nJ8aLLa+LFavFPsV23S5iLcSj2UMIbbWJZCkxRFQlGZnsOieh5rEMd8j1MRkkqNq+ZalkPOdDw==",
   "authNonce": "vector-auth-nonce-0001",
-  "authSignature": "cHIdDHtZ2+mGAoG4GAAHwXXdzN5OmyugM2O+GAff4kc0OG1qBUAO+RPCLMwCi2VDYLZZUVQnyndFn8VKsDzXCw==",
-  "publicKeyHex": "1d662034bac14e51f660cd712c74b9fe893942c21e5d75062545128386f4485e"
+  "authSignature": "qTrhYad3kayYIA0BEEslIgA/lQUsqhw/+Zd2N336TCNo5lD1s6UJpUpiGLp4jc+dMBK8dGWHI6xuX0b4jMmhAQ==",
+  "publicKeyHex": "9606a90bb8136d521d1c982d9713416164890d818e74e8d0999a7cc4cb73fcc4"
 }

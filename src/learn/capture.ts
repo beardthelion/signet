@@ -1,22 +1,22 @@
 /**
  * Learning capture: distilled learnings -> `memory/<type>/<slug>.md`
- * passport entries (SPEC section 6 PS-120, section 5 PS-110).
+ * signet entries (SPEC section 6 SN-120, section 5 SN-110).
  *
- * Every learned entry carries YAML frontmatter with `type:` (the PS-120
+ * Every learned entry carries YAML frontmatter with `type:` (the SN-120
  * memory type) and `provenance: learned:<harness>` so a consuming harness
  * can label or down-weight non-self-authored content on recall. Entries
  * deliberately carry no timestamps or session ids: identical learned
  * content must render byte-identical plaintext so the client's
- * deterministic encryption (PS-033) produces the same ciphertext hash and
- * the manifest dedupes it — a re-learned fact is `unchanged`, never a
+ * deterministic encryption (SN-033) produces the same ciphertext hash and
+ * the manifest dedupes it - a re-learned fact is `unchanged`, never a
  * duplicate entry.
  *
  * Trust boundary: learned content is model-authored, so it is scanned
  * HERE, before the client sees it, and any entry the scan flags is
- * refused regardless of the client's scan mode — a `warn` client must not
+ * refused regardless of the client's scan mode - a `warn` client must not
  * soften the bar for content destined for long-term memory. Blocked
  * learnings are reported in the outcome, never silently written and never
- * silently dropped. The client push then applies its own PS-110 scan and
+ * silently dropped. The client push then applies its own SN-110 scan and
  * the manifest-hash delta, so capture inherits the same guarantees as
  * every other write path.
  */
@@ -67,7 +67,7 @@ function slugify(title: string): string {
 
 /**
  * Render a learning as its entry key plus full entry content. The
- * frontmatter shape is fixed by PS-120 and is deliberately free of
+ * frontmatter shape is fixed by SN-120 and is deliberately free of
  * anything time- or session-varying so equal learnings dedupe.
  */
 export function renderLearningEntry(

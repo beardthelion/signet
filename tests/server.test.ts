@@ -1,7 +1,7 @@
 /**
- * Wire-protocol tests for the passport store (SPEC §7, PS-080..082).
+ * Wire-protocol tests for the signet store (SPEC §7, SN-080..082).
  *
- * Everything goes through handleRequest(new Request(...)) — no socket — with
+ * Everything goes through handleRequest(new Request(...)) - no socket - with
  * real challenge/verify auth, so these tests cover routing, authorization,
  * manifest + blob storage, delta sync, the base precondition, and cap
  * rejection exactly as a client sees them.
@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { handleRequest } from '../src/server/handler.ts'
-import { manifestHash } from '../src/server/passport.ts'
+import { manifestHash } from '../src/server/signet.ts'
 import { authed, identity, mustToken, nsPath } from './setup.ts'
 
 const b64 = (s: string) => Buffer.from(s).toString('base64')
@@ -32,7 +32,7 @@ async function putOk(token: string, ns: string, body: PutBody) {
   return json
 }
 
-describe('manifest + blob round trip (PS-080)', () => {
+describe('manifest + blob round trip (SN-080)', () => {
   const id = identity('srv-roundtrip')
 
   test('PUT then GET returns the same ciphertext', async () => {
@@ -116,7 +116,7 @@ describe('?view=hashes delta sync', () => {
   })
 })
 
-describe('base precondition (PS-081)', () => {
+describe('base precondition (SN-081)', () => {
   const id = identity('srv-base')
   const WRONG = `sha256:${'0'.repeat(64)}`
 
@@ -151,7 +151,7 @@ describe('base precondition (PS-081)', () => {
     expect(ok.status).toBe(200)
 
     const stale = await put(token, id.namespace, {
-      base: null, // "I built from empty" — but the namespace is not empty
+      base: null, // "I built from empty" - but the namespace is not empty
       entries: { 'memory/d.md': b64('v1') },
     })
     expect(stale.status).toBe(409)
@@ -169,7 +169,7 @@ describe('base precondition (PS-081)', () => {
   })
 })
 
-describe('entry-key rejection before storage (PS-021)', () => {
+describe('entry-key rejection before storage (SN-021)', () => {
   const id = identity('srv-keys')
 
   test('traversal and unknown-section keys are skipped, never stored', async () => {
@@ -289,18 +289,14 @@ describe('protocol edges', () => {
 
   test('an invalid namespace is 400 even with a valid token', async () => {
     const token = await mustToken(id)
-    const res = await authed(token, 'GET', '/passport/user:alice')
+    const res = await authed(token, 'GET', '/signet/user:alice')
     expect(res.status).toBe(400)
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('invalid_namespace')
   })
 
-  test('malformed percent-encoding under /passport/ is 400, not 404', async () => {
+  test('malformed percent-encoding under /signet/ is 400, not 404', async () => {
     const token = await mustToken(id)
-    for (const suffix of [
-      '/passport/%E0%A4%A',
-      `${nsPath(id.namespace)}/memory/%zz`,
-      '/passport/%',
-    ]) {
+    for (const suffix of ['/signet/%E0%A4%A', `${nsPath(id.namespace)}/memory/%zz`, '/signet/%']) {
       const res = await authed(token, 'GET', suffix)
       expect(res.status).toBe(400)
       expect(((await res.json()) as { error: { code: string } }).error.code).toBe('bad_request')

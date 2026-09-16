@@ -1,13 +1,13 @@
 {
-  "specVersion": "passport-spec/0.1",
+  "specVersion": "signet-spec/0.1",
   "attestation": {
-    "genesisDid": "did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
-    "newDid": "did:key:z6MkjsHJ27VECNVM394DimiaZpUzitPHA63iRWLVhj4yxdnN",
+    "genesisDid": "did:key:z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq",
+    "newDid": "did:key:z6MkeULKaFrJqwuT1iER1qwVVSHrvxMr6TdgbYCsE9Mm2f2v",
     "seq": 1,
     "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
-    "sig": "ta/eQx3H4G2TngKiOa2hv4iLGqmXcR3oWAfR8mzcjn9rt1GNTyODh3ey8OD5wQyiR7iD0fe21a0Wj5zSTdRVAw=="
+    "sig": "MvkcCw1kFtpT4iy24h+wYSNwhzZ85UqhYB2NYl0tnaqYHerqQFEK4h5fG01PpMNmrWNT5B3jzkgXzxDZ6+YkBQ=="
   },
-  "attestationHash": "5169dc640246b0b1de89c45f5a3e2d73fee978b4b8fa86d70974553f9cbda57e",
-  "genesisDid": "did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
-  "successorDid": "did:key:z6MkjsHJ27VECNVM394DimiaZpUzitPHA63iRWLVhj4yxdnN"
+  "attestationHash": "6df1ac04269dc903fc2c7d6f370c676a6b54952dcab1ec33900035177157eb12",
+  "genesisDid": "did:key:z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq",
+  "successorDid": "did:key:z6MkeULKaFrJqwuT1iER1qwVVSHrvxMr6TdgbYCsE9Mm2f2v"
 }

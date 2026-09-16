@@ -1,12 +1,12 @@
 /**
- * Two-secret custody (PS-100..103).
+ * Two-secret custody (SN-100..103).
  *
- * A passport is governed by two secrets: the encryption passphrase and the
- * holder's Ed25519 signing key. Both live client-side only — a conformant
+ * A signet is governed by two secrets: the encryption passphrase and the
+ * holder's Ed25519 signing key. Both live client-side only - a conformant
  * store MUST NEVER receive either, and nothing in this module sends them
  * anywhere. Custody is a local-state problem, so the boundary this file
  * defends is the filesystem: secrets go into exactly one `0600` file under
- * the passport state dir (default `~/.passport/`, `PASSPORT_HOME` override),
+ * the signet state dir (default `~/.signet/`, `SIGNET_HOME` override),
  * never into the workspace, a dotfile the harness might commit, or the store.
  *
  * The backend is a narrow interface (`CustodyBackend`) so an OS keychain can
@@ -15,15 +15,15 @@
  * file's mode is re-asserted before it lands, since `writeFile`'s mode only
  * applies at creation.
  *
- * Export/import (PS-102) moves custody between machines as an encrypted
+ * Export/import (SN-102) moves custody between machines as an encrypted
  * bundle: the secrets JSON is encrypted with a user-supplied export
- * passphrase through the same crypto as passport entries, domain-separated
- * by the KDF namespace `custody/export` (not a passport namespace — it can
+ * passphrase through the same crypto as signet entries, domain-separated
+ * by the KDF namespace `custody/export` (not a signet namespace - it can
  * never collide with real entry encryption). The bundle is safe to put on
  * a flash drive or in a password manager; it is still a secret and is
  * written `0600` by the CLI.
  *
- * PS-103: key loss is total loss. There is deliberately no recovery path.
+ * SN-103: key loss is total loss. There is deliberately no recovery path.
  */
 
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -36,15 +36,15 @@ import { decryptEntry, deriveKey, encryptEntry } from './crypto.ts'
 /** What custody protects: both secrets, plus the rotation/auth state. */
 export const CustodySecrets = z.object({
   version: z.literal(1),
-  /** The passport's immutable root; the namespace is derived from it. */
+  /** The signet's immutable root; the namespace is derived from it. */
   genesisDid: DidKey,
-  /** Encryption secret (PS-100). */
+  /** Encryption secret (SN-100). */
   passphrase: z.string().min(1),
-  /** Active signing key, PKCS8 DER base64 (PS-100). Equals genesis until a rotation lands. */
+  /** Active signing key, PKCS8 DER base64 (SN-100). Equals genesis until a rotation lands. */
   pkcs8: z.string().min(1),
-  /** Rotation attestations in chain order — presented at /auth/verify. */
+  /** Rotation attestations in chain order - presented at /auth/verify. */
   attestations: z.array(RotationAttestation).default([]),
-  /** Last verified integrity-manifest seq per namespace (PS-041 anti-rollback). */
+  /** Last verified integrity-manifest seq per namespace (SN-041 anti-rollback). */
   manifestSeqs: z.record(z.string(), z.number().int().nonnegative()).default({}),
 })
 export type CustodySecrets = z.infer<typeof CustodySecrets>
@@ -63,20 +63,20 @@ export interface CustodyBackend {
   describe(): string
 }
 
-/** The passport state dir: $PASSPORT_HOME or ~/.passport. */
-export function passportHome(): string {
-  return process.env.PASSPORT_HOME ?? join(homedir(), '.passport')
+/** The signet state dir: $SIGNET_HOME or ~/.signet. */
+export function signetHome(): string {
+  return process.env.SIGNET_HOME ?? join(homedir(), '.signet')
 }
 
 const CUSTODY_FILE = 'custody.json'
 
-/** `0600` custody file under the state dir — never a committable path. */
+/** `0600` custody file under the state dir - never a committable path. */
 export class FileCustodyBackend implements CustodyBackend {
   readonly dir: string
   readonly path: string
 
   constructor(dir?: string) {
-    this.dir = dir ?? passportHome()
+    this.dir = dir ?? signetHome()
     this.path = join(this.dir, CUSTODY_FILE)
   }
 
@@ -88,7 +88,7 @@ export class FileCustodyBackend implements CustodyBackend {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw err
     }
-    // Invalid JSON lands in the same fail-closed refusal as a schema miss —
+    // Invalid JSON lands in the same fail-closed refusal as a schema miss -
     // a bare SyntaxError would leak a parse detail, not an instruction.
     let json: unknown
     try {
@@ -100,7 +100,7 @@ export class FileCustodyBackend implements CustodyBackend {
     if (!parsed.success) {
       throw new Error(
         `custody file ${this.path} is unreadable or malformed; refusing to guess. ` +
-          'Restore it with `passport import`.',
+          'Restore it with `signet import`.',
       )
     }
     return parsed.data
@@ -148,8 +148,8 @@ export const PASSPHRASE_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'
 export const PASSPHRASE_LENGTH = 26
 
 /**
- * Generate a passphrase from platform randomness. Local only — the caller
- * shows it to the holder once; nothing sends it anywhere (PS-100).
+ * Generate a passphrase from platform randomness. Local only - the caller
+ * shows it to the holder once; nothing sends it anywhere (SN-100).
  */
 export function generatePassphrase(): string {
   const bytes = new Uint8Array(PASSPHRASE_LENGTH)
@@ -159,19 +159,19 @@ export function generatePassphrase(): string {
   return out
 }
 
-// ─── Export / import (PS-102) ───────────────────────────────────────────
+// ─── Export / import (SN-102) ───────────────────────────────────────────
 
 /**
- * KDF domain for export bundles. Deliberately NOT a passport namespace (it
- * fails the PS-012 grammar), so bundle encryption can never collide with or
- * be replayed as passport entry encryption.
+ * KDF domain for export bundles. Deliberately NOT a signet namespace (it
+ * fails the SN-012 grammar), so bundle encryption can never collide with or
+ * be replayed as signet entry encryption.
  */
 const EXPORT_NS = 'custody/export'
 const EXPORT_ENTRY_KEY = 'custody/export'
 
 /**
- * The cleartext a bundle protects — the two secrets, the rotation chain, and
- * the PS-041 anti-rollback floors. manifestSeqs must round-trip: without it
+ * The cleartext a bundle protects - the two secrets, the rotation chain, and
+ * the SN-041 anti-rollback floors. manifestSeqs must round-trip: without it
  * the destination machine forgets the last verified seq and a replayed old
  * manifest would pass the rollback check.
  */
@@ -184,8 +184,8 @@ type BundlePayload = {
 }
 
 /**
- * Produce an encrypted custody bundle (PS-102): JSON text carrying a single
- * base64 blob — the secrets encrypted with `exportPassphrase` through the
+ * Produce an encrypted custody bundle (SN-102): JSON text carrying a single
+ * base64 blob - the secrets encrypted with `exportPassphrase` through the
  * same AES-256-GCM scheme as entries, under a domain-separated KDF salt.
  */
 export function exportBundle(secrets: CustodySecrets, exportPassphrase: string): string {
@@ -199,7 +199,7 @@ export function exportBundle(secrets: CustodySecrets, exportPassphrase: string):
   const key = deriveKey(exportPassphrase, EXPORT_NS)
   const blob = encryptEntry(key, EXPORT_ENTRY_KEY, JSON.stringify(payload))
   return `${JSON.stringify(
-    { version: 1, kind: 'passport-custody', kdf: 'scrypt', cipher: 'aes-256-gcm', blob },
+    { version: 1, kind: 'signet-custody', kdf: 'scrypt', cipher: 'aes-256-gcm', blob },
     null,
     2,
   )}\n`
@@ -207,7 +207,7 @@ export function exportBundle(secrets: CustodySecrets, exportPassphrase: string):
 
 /**
  * Decrypt a custody bundle back into secrets. Throws on a wrong export
- * passphrase or a malformed/tampered bundle — there is no partial import.
+ * passphrase or a malformed/tampered bundle - there is no partial import.
  */
 export function importBundle(bundleText: string, exportPassphrase: string): CustodySecrets {
   let outer: { blob?: unknown }
@@ -224,7 +224,7 @@ export function importBundle(bundleText: string, exportPassphrase: string): Cust
     const key = deriveKey(exportPassphrase, EXPORT_NS)
     payload = JSON.parse(decryptEntry(key, EXPORT_ENTRY_KEY, outer.blob))
   } catch {
-    throw new Error('custody bundle did not decrypt — wrong export passphrase or tampered file')
+    throw new Error('custody bundle did not decrypt - wrong export passphrase or tampered file')
   }
   const parsed = CustodySecrets.safeParse({ version: 1, ...payload })
   if (!parsed.success) throw new Error('custody bundle decrypted but is malformed')

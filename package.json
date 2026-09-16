@@ -1,7 +1,7 @@
 {
-  "name": "passport-suite",
+  "name": "signet",
   "version": "0.1.0",
-  "description": "Self-sovereign AI Passport — DID-rooted, encrypted, portable agent state. Spec, crypto-blind store, client, MCP adapter, conformance checker.",
+  "description": "Self-sovereign Signet - DID-rooted, encrypted, portable agent state. Spec, crypto-blind store, client, MCP adapter, conformance checker.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -9,8 +9,8 @@
     "node": ">=20.0.0"
   },
   "bin": {
-    "passport": "bin/passport.ts",
-    "passport-check": "bin/passport-check.ts"
+    "signet": "bin/signet.ts",
+    "signet-check": "bin/signet-check.ts"
   },
   "files": [
     "bin",

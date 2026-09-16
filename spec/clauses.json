@@ -1,82 +1,82 @@
 {
-  "specVersion": "passport-spec/0.1",
+  "specVersion": "signet-spec/0.1",
   "clauses": [
-    { "id": "PS-001", "title": "did:key required", "check": "checkDidKey" },
+    { "id": "SN-001", "title": "did:key required", "check": "checkDidKey" },
     {
-      "id": "PS-002",
+      "id": "SN-002",
       "title": "did:web optional, not a namespace root",
       "check": "checkDidWebOptional"
     },
-    { "id": "PS-010", "title": "genesis DID namespace binding", "check": "checkGenesisBinding" },
+    { "id": "SN-010", "title": "genesis DID namespace binding", "check": "checkGenesisBinding" },
     {
-      "id": "PS-011",
+      "id": "SN-011",
       "title": "colon-free DID namespace encoding",
       "check": "checkNamespaceEncoding"
     },
-    { "id": "PS-012", "title": "namespace grammar enforced", "check": "checkNamespaceGrammar" },
-    { "id": "PS-020", "title": "entry key section grammar", "check": "checkEntryKeyGrammar" },
+    { "id": "SN-012", "title": "namespace grammar enforced", "check": "checkNamespaceGrammar" },
+    { "id": "SN-020", "title": "entry key section grammar", "check": "checkEntryKeyGrammar" },
     {
-      "id": "PS-021",
+      "id": "SN-021",
       "title": "traversal and invalid keys rejected",
       "check": "checkTraversalRejected"
     },
-    { "id": "PS-022", "title": "chunked session grammar", "check": "checkSessionChunks" },
-    { "id": "PS-030", "title": "blob envelope format", "check": "checkBlobFormat" },
-    { "id": "PS-031", "title": "namespace-bound scrypt KDF", "check": "checkKdf" },
-    { "id": "PS-032", "title": "AES-256-GCM with entry-key AAD", "check": "checkAead" },
-    { "id": "PS-033", "title": "deterministic nonce", "check": "checkDeterministicNonce" },
-    { "id": "PS-034", "title": "metadata leak boundary", "check": "checkLeakBoundary" },
-    { "id": "PS-035", "title": "sanctioned alternate cipher only", "check": "checkAltCipher" },
-    { "id": "PS-040", "title": "signed integrity manifest", "check": "checkManifestSignature" },
+    { "id": "SN-022", "title": "chunked session grammar", "check": "checkSessionChunks" },
+    { "id": "SN-030", "title": "blob envelope format", "check": "checkBlobFormat" },
+    { "id": "SN-031", "title": "namespace-bound scrypt KDF", "check": "checkKdf" },
+    { "id": "SN-032", "title": "AES-256-GCM with entry-key AAD", "check": "checkAead" },
+    { "id": "SN-033", "title": "deterministic nonce", "check": "checkDeterministicNonce" },
+    { "id": "SN-034", "title": "metadata leak boundary", "check": "checkLeakBoundary" },
+    { "id": "SN-035", "title": "sanctioned alternate cipher only", "check": "checkAltCipher" },
+    { "id": "SN-040", "title": "signed integrity manifest", "check": "checkManifestSignature" },
     {
-      "id": "PS-041",
+      "id": "SN-041",
       "title": "manifest seq monotonic, fail closed",
       "check": "checkManifestRollback"
     },
-    { "id": "PS-050", "title": "rotation attestation recorded", "check": "checkRotationRecord" },
+    { "id": "SN-050", "title": "rotation attestation recorded", "check": "checkRotationRecord" },
     {
-      "id": "PS-051",
+      "id": "SN-051",
       "title": "attestation fields and chaining",
       "check": "checkAttestationChain"
     },
     {
-      "id": "PS-052",
+      "id": "SN-052",
       "title": "successor-key authorization via chain",
       "check": "checkSuccessorAuth"
     },
     {
-      "id": "PS-053",
+      "id": "SN-053",
       "title": "post-rotation namespace stays genesis",
       "check": "checkRotationNamespace"
     },
-    { "id": "PS-060", "title": "grant action classes", "check": "checkGrantVocabulary" },
-    { "id": "PS-061", "title": "grants never auto-applied", "check": "checkGrantNonApplication" },
-    { "id": "PS-062", "title": "confirmed grant write path", "check": "checkGrantRecord" },
+    { "id": "SN-060", "title": "grant action classes", "check": "checkGrantVocabulary" },
+    { "id": "SN-061", "title": "grants never auto-applied", "check": "checkGrantNonApplication" },
+    { "id": "SN-062", "title": "confirmed grant write path", "check": "checkGrantRecord" },
     {
-      "id": "PS-070",
+      "id": "SN-070",
       "title": "permission keys denied via config",
       "check": "checkConfigDenylist"
     },
-    { "id": "PS-080", "title": "manifest+blobs delta sync", "check": "checkDeltaSync" },
-    { "id": "PS-081", "title": "caps all-or-nothing, skipped not dropped", "check": "checkCaps" },
-    { "id": "PS-082", "title": "per-namespace locking", "check": "checkNamespaceLock" },
-    { "id": "PS-090", "title": "DID bearer auth, 401/403, replay", "check": "checkAuth" },
+    { "id": "SN-080", "title": "manifest+blobs delta sync", "check": "checkDeltaSync" },
+    { "id": "SN-081", "title": "caps all-or-nothing, skipped not dropped", "check": "checkCaps" },
+    { "id": "SN-082", "title": "per-namespace locking", "check": "checkNamespaceLock" },
+    { "id": "SN-090", "title": "DID bearer auth, 401/403, replay", "check": "checkAuth" },
     {
-      "id": "PS-091",
+      "id": "SN-091",
       "title": "loopback default, TLS for non-loopback",
       "check": "checkBindPolicy"
     },
-    { "id": "PS-092", "title": "local single-machine mode", "check": "checkLocalMode" },
+    { "id": "SN-092", "title": "local single-machine mode", "check": "checkLocalMode" },
     {
-      "id": "PS-100",
+      "id": "SN-100",
       "title": "two-secret custody, secrets never leave client",
       "check": "checkCustody"
     },
-    { "id": "PS-101", "title": "init writes no committable secrets", "check": "checkInitCustody" },
-    { "id": "PS-102", "title": "export/import custody transfer", "check": "checkExportImport" },
-    { "id": "PS-110", "title": "pre-encryption secret scan", "check": "checkSecretScan" },
-    { "id": "PS-120", "title": "provenance frontmatter", "check": "checkProvenance" },
-    { "id": "PS-200", "title": "suite CLI vector conformance", "check": "checkCliVectors" },
-    { "id": "PS-201", "title": "MCP recall round-trip", "check": "checkMcpRecall" }
+    { "id": "SN-101", "title": "init writes no committable secrets", "check": "checkInitCustody" },
+    { "id": "SN-102", "title": "export/import custody transfer", "check": "checkExportImport" },
+    { "id": "SN-110", "title": "pre-encryption secret scan", "check": "checkSecretScan" },
+    { "id": "SN-120", "title": "provenance frontmatter", "check": "checkProvenance" },
+    { "id": "SN-200", "title": "suite CLI vector conformance", "check": "checkCliVectors" },
+    { "id": "SN-201", "title": "MCP recall round-trip", "check": "checkMcpRecall" }
   ]
 }

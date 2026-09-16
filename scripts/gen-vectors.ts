@@ -1,6 +1,6 @@
 /**
- * Generates spec/vectors/*.json — the shared conformance vectors that both the
- * TypeScript client and the Zig fx passport layer must pass.
+ * Generates spec/vectors/*.json - the shared conformance vectors that both the
+ * TypeScript client and the Zig fx signet layer must pass.
  *
  * Everything is deterministic: fixed Ed25519 seeds, fixed passphrase, the
  * spec's deterministic nonce. Regenerate with `bun run scripts/gen-vectors.ts`
@@ -20,7 +20,7 @@ import {
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const SPEC_VERSION = 'passport-spec/0.1'
+const SPEC_VERSION = 'signet-spec/0.1'
 const OUT = join(import.meta.dir, '..', 'spec', 'vectors')
 
 // ---- base58btc (did:key multibase) ----------------------------------------
@@ -84,7 +84,7 @@ const NONCE_LEN = 12
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }
 
 function deriveKey(passphrase: string, namespace: string): Buffer {
-  const salt = createHash('sha256').update(`passport-suite:${namespace}`).digest()
+  const salt = createHash('sha256').update(`signet:${namespace}`).digest()
   return scryptSync(passphrase, salt, KEY_LEN, SCRYPT)
 }
 
@@ -113,13 +113,13 @@ function canonicalJson(value: unknown): string {
 
 // ---- emit vectors ------------------------------------------------------------
 
-const genesisSeed = createHash('sha256').update('passport-spec vector genesis').digest()
-const successorSeed = createHash('sha256').update('passport-spec vector successor').digest()
+const genesisSeed = createHash('sha256').update('signet-spec vector genesis').digest()
+const successorSeed = createHash('sha256').update('signet-spec vector successor').digest()
 const genesis = keypairFromSeed(genesisSeed)
 const successor = keypairFromSeed(successorSeed)
 const genesisDid = didKey(genesis.rawPub)
 const successorDid = didKey(successor.rawPub)
-const namespace = `passport:${encodeDid(genesisDid)}`
+const namespace = `signet:${encodeDid(genesisDid)}`
 
 const passphrase = 'correct horse battery staple'
 const encKey = deriveKey(passphrase, namespace)
@@ -130,7 +130,7 @@ const entries: Record<string, string> = {
   'grants/grant-001.json':
     '{"id":"g1","action":"fs.read","scope":"src/**","granted_by":"holder","granted_at":"2026-01-01T00:00:00Z"}\n',
   'identity/did.json': `${JSON.stringify({ did: genesisDid, method: 'did:key' })}\n`,
-  'sessions/demo/000001': '{"role":"user","text":"hello passport"}\n',
+  'sessions/demo/000001': '{"role":"user","text":"hello signet"}\n',
   'sessions/demo/000002': '{"role":"agent","text":"state is yours now"}\n',
 }
 
@@ -200,12 +200,12 @@ writeFileSync(
         genesis.priv,
       ).toString('base64'),
       // The /auth/verify preimage is domain-separated: UTF-8 bytes of
-      // "passport-auth:" + nonce (SPEC §7.1). Pinned here so an
+      // "signet-auth:" + nonce (SPEC §7.1). Pinned here so an
       // implementation that signs the bare nonce drifts loudly.
       authNonce: 'vector-auth-nonce-0001',
       authSignature: sign(
         null,
-        Buffer.from('passport-auth:vector-auth-nonce-0001', 'utf8'),
+        Buffer.from('signet-auth:vector-auth-nonce-0001', 'utf8'),
         genesis.priv,
       ).toString('base64'),
       publicKeyHex: genesis.rawPub.toString('hex'),

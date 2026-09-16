@@ -1,15 +1,15 @@
 /**
- * BlobStore — the pluggable persistence interface, the storage-path grammar,
+ * BlobStore - the pluggable persistence interface, the storage-path grammar,
  * and the STORE-env driver factory.
  *
- * The store holds only opaque bytes (PS-034): per namespace slug there is one
+ * The store holds only opaque bytes (SN-034): per namespace slug there is one
  * `manifest.json` (`entryKey -> {hash, size, updatedAt}`), one content-
  * addressed ciphertext blob per entry, and one `attestations.json` holding
  * the persisted rotation chain. The store has no idea what an "entry" is and
  * could not decrypt one if it wanted to.
  *
  * Keys passed to adapters are already validated (see namespace.ts), so paths
- * are built without re-checking traversal — the one exception is `bareHash`,
+ * are built without re-checking traversal - the one exception is `bareHash`,
  * which re-checks a manifest-carried digest before it becomes a filename,
  * because a manifest is parsed JSON, not validated input.
  *
@@ -33,7 +33,7 @@ export interface BlobStore {
    * from the previous manifest can never see it.
    */
   list(prefix: string): Promise<string[]>
-  /** A short label for logs/health (e.g. "fs:/data", "s3:passports"). */
+  /** A short label for logs/health (e.g. "fs:/data", "s3:signets"). */
   describe(): string
   /**
    * Whether `delete` actually removes the bytes. A store that keeps history
@@ -62,7 +62,7 @@ export function attestationsPath(nsSlug: string): string {
  * overwrite never mutates a blob the currently-visible manifest still points
  * at, which is what makes a crash mid-commit leave the previous state
  * readable and self-consistent. Encryption is deterministic, so two entries
- * holding identical ciphertext share one blob — cleanup must check the live
+ * holding identical ciphertext share one blob - cleanup must check the live
  * hash set before removing one, never assume one entry owns it.
  */
 export function blobPath(nsSlug: string, ciphertextHash: string): string {
@@ -77,7 +77,7 @@ export function blobPrefix(nsSlug: string): string {
 /**
  * Strip the `sha256:` prefix and prove what remains is a bare hex digest.
  * A manifest hash reaches a storage path here, and a manifest is parsed JSON
- * rather than validated input — without the check a hash carrying path
+ * rather than validated input - without the check a hash carrying path
  * separators would escape the namespace directory.
  */
 function bareHash(ciphertextHash: string): string {
@@ -89,7 +89,7 @@ function bareHash(ciphertextHash: string): string {
 // ─── Driver factory ─────────────────────────────────────────────────────
 
 const storeDriver = (process.env.STORE ?? 'fs').trim().toLowerCase()
-const dataDir = (process.env.PASSPORT_DATA_DIR ?? './data').trim()
+const dataDir = (process.env.SIGNET_DATA_DIR ?? './data').trim()
 const s3 = {
   bucket: (process.env.S3_BUCKET ?? '').trim(),
   endpoint: (process.env.S3_ENDPOINT ?? '').trim().replace(/\/$/, ''),

@@ -2,8 +2,8 @@
  * Token-bucket rate limiter tests.
  *
  * Time is injected so burst, refill, and idle eviction are all deterministic:
- * the limiter refills at PASSPORT_RATE_PER_MINUTE (240 in test env = 4/sec),
- * caps each bucket at PASSPORT_RATE_BURST (480), and evicts buckets idle for
+ * the limiter refills at SIGNET_RATE_PER_MINUTE (240 in test env = 4/sec),
+ * caps each bucket at SIGNET_RATE_BURST (480), and evicts buckets idle for
  * three full refill windows. The hard ceiling refuses NEW keys once the map
  * is full without touching the keys already tracked.
  */
@@ -49,7 +49,7 @@ describe('bucket basics', () => {
     // Burn the bucket almost dry.
     for (let i = 0; i < 479; i++) take(key, t0)
     // One refill window is 120 s (480 tokens at 4/sec); three windows idle
-    // makes the bucket eligible for eviction — and either way it must
+    // makes the bucket eligible for eviction - and either way it must
     // answer with a full allowance again.
     const later = t0 + 400_000
     for (let i = 0; i < 480; i++) expect(take(key, later).ok).toBe(true)

@@ -1,5 +1,5 @@
 /**
- * Zod schemas for the passport wire and storage formats.
+ * Zod schemas for the signet wire and storage formats.
  *
  * These types describe documents that cross a trust boundary: they arrive from
  * the wire or the store and are attacker-influenced until validated. Parsing
@@ -42,12 +42,12 @@ export const EntryKey = z
   )
 export type EntryKey = z.infer<typeof EntryKey>
 
-/** Encoded genesis DID namespace: `passport:` + DID with `:` -> `_`. */
+/** Encoded genesis DID namespace: `signet:` + DID with `:` -> `_`. */
 export const Namespace = z
   .string()
   .regex(
-    /^passport:did_[a-z]+_[A-Za-z0-9._-]{1,240}$/,
-    'namespace must be passport:<encoded genesis DID>',
+    /^signet:did_[a-z]+_[A-Za-z0-9._-]{1,240}$/,
+    'namespace must be signet:<encoded genesis DID>',
   )
 export type Namespace = z.infer<typeof Namespace>
 
@@ -113,7 +113,7 @@ export const RotationAttestation = z.object({
 })
 export type RotationAttestation = z.infer<typeof RotationAttestation>
 
-/** Server manifest entry metadata — the documented plaintext leak boundary. */
+/** Server manifest entry metadata - the documented plaintext leak boundary. */
 export const ManifestEntry = z.object({
   hash: ContentHash,
   size: z.number().int().nonnegative(),
@@ -126,7 +126,7 @@ export const Manifest = z.object({
 })
 export type Manifest = z.infer<typeof Manifest>
 
-/** Keys a consumer may not set through `config/` — they belong in `grants/`. */
+/** Keys a consumer may not set through `config/` - they belong in `grants/`. */
 const DENIED_CONFIG_RE = /permission|grant|allow|deny|trust|sandbox|exec|approve|policy/i
 
 export function isDeniedConfigKey(key: string): boolean {

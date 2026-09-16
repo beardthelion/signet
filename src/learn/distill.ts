@@ -1,29 +1,29 @@
 /**
  * Distillation: raw session content -> typed learning candidates
- * (SPEC section 6 / PS-120).
+ * (SPEC section 6 / SN-120).
  *
  * The input is whatever a harness calls "the session": transcript text,
  * pulled `sessions/<id>/<seq>` chunks, or a file the holder points at. The
- * output uses the PS-120 memory taxonomy, which is also the first path
+ * output uses the SN-120 memory taxonomy, which is also the first path
  * segment of the entry key (`memory/<type>/<slug>.md`):
  *
- *   user      — holder preferences and standing facts about the user
- *   feedback  — corrections, solved problems, and "how to work" guidance
- *   project   — project decisions, conventions, and state
- *   reference — pointers to external material (docs, tickets, runbooks)
+ *   user      - holder preferences and standing facts about the user
+ *   feedback  - corrections, solved problems, and "how to work" guidance
+ *   project   - project decisions, conventions, and state
+ *   reference - pointers to external material (docs, tickets, runbooks)
  *
  * This is a deterministic heuristic extractor, not a model call: it lifts
  * lines that carry a learnable signal and ignores everything else. It errs
  * toward missing a learning over writing noise, so an empty result is the
  * correct answer for a session with nothing worth keeping, and callers
- * MUST treat empty as "write nothing" — no entries, no manifest churn.
+ * MUST treat empty as "write nothing" - no entries, no manifest churn.
  */
 
 const LEARNING_TYPES = ['user', 'feedback', 'project', 'reference'] as const
 export type LearningType = (typeof LEARNING_TYPES)[number]
 
 export type Learning = {
-  /** PS-120 memory type; becomes the `memory/<type>/` segment and `type:` field. */
+  /** SN-120 memory type; becomes the `memory/<type>/` segment and `type:` field. */
   type: LearningType
   /** One-line summary; becomes the frontmatter `description:` and slug source. */
   title: string

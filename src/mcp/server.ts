@@ -1,18 +1,18 @@
 /**
- * `passport mcp` — a stdio MCP server that exposes the holder's passport to
+ * `signet mcp` - a stdio MCP server that exposes the holder's signet to
  * any MCP-capable harness (Claude Code, Cursor, opencode, SDK agents).
  *
- * It is a thin wrapper over PassportClient: the passphrase and the Ed25519
+ * It is a thin wrapper over SignetClient: the passphrase and the Ed25519
  * holder key live in THIS local process (loaded from the 0600 custody file,
- * PASSPORT_PASSPHRASE may override), so encryption/decryption/signing happen
- * here and the remote store still only ever sees ciphertext (PS-100/034).
+ * SIGNET_PASSPHRASE may override), so encryption/decryption/signing happen
+ * here and the remote store still only ever sees ciphertext (SN-100/034).
  * Tool logic is in ./tools.ts; this file just binds it to the MCP protocol.
  *
- * Config (env): PASSPORT_URL (default http://localhost:8080),
- * PASSPORT_HOME (custody dir), PASSPORT_PASSPHRASE (optional override),
- * PASSPORT_SCAN (block|warn|off).
+ * Config (env): SIGNET_URL (default http://localhost:8080),
+ * SIGNET_HOME (custody dir), SIGNET_PASSPHRASE (optional override),
+ * SIGNET_SCAN (block|warn|off).
  *
- * IMPORTANT: stdout is the MCP protocol channel — never write logs there.
+ * IMPORTANT: stdout is the MCP protocol channel - never write logs there.
  * All diagnostics go to stderr, and nothing here runs on import: the CLI
  * calls main() explicitly so a misconfigured process exits before the
  * transport exists and never half-serves.
@@ -24,7 +24,7 @@ import { z } from 'zod'
 import { clientFromCustody, persistManifestSeq } from '../client/session.ts'
 import { DEFAULT_URL } from '../types/defaults.ts'
 import { GRANT_ACTIONS, SECTIONS } from '../types/index.ts'
-import { PASSPORT_GUIDE, SHORT_INSTRUCTIONS } from './guide.ts'
+import { SHORT_INSTRUCTIONS, SIGNET_GUIDE } from './guide.ts'
 import { makeTools, type ToolResult } from './tools.ts'
 
 const toMcp = (r: ToolResult) => ({
@@ -32,7 +32,7 @@ const toMcp = (r: ToolResult) => ({
   ...(r.isError ? { isError: true } : {}),
 })
 
-const stderr = (line: string) => process.stderr.write(`passport mcp: ${line}\n`)
+const stderr = (line: string) => process.stderr.write(`signet mcp: ${line}\n`)
 
 /**
  * Load custody, build the client, bind the tools, connect the transport.
@@ -47,7 +47,7 @@ export async function main(): Promise<void> {
       stderr(`${findings.length} potential secret(s) in pushed entries (scan mode warn)`),
   })
   if (!wired) {
-    stderr('no custody found — run `passport init` or `passport import` first')
+    stderr('no custody found - run `signet init` or `signet import` first')
     process.exit(1)
   }
   const { client, secrets } = wired
@@ -55,39 +55,39 @@ export async function main(): Promise<void> {
   const tools = makeTools(client, {
     holderDid: secrets.genesisDid,
     // Persist the manifest seq after every write so the next process still
-    // rejects a rolled-back manifest (PS-041 state lives in custody).
+    // rejects a rolled-back manifest (SN-041 state lives in custody).
     onSync: () => persistManifestSeq(client, secrets),
   })
 
   const server = new McpServer(
-    { name: 'passport', version: '0.1.0' },
+    { name: 'signet', version: '0.1.0' },
     { instructions: SHORT_INSTRUCTIONS },
   )
 
   // The full usage protocol, fetchable by any MCP client.
   server.registerPrompt(
-    'passport_guide',
+    'signet_guide',
     {
-      title: 'How to use the AI Passport',
+      title: 'How to use the Signet',
       description:
-        'The passport-usage protocol: when to recall, what to save, how grants work as records, and how to wire the server without committing a secret. Read this once at the start of a session.',
+        'The signet-usage protocol: when to recall, what to save, how grants work as records, and how to wire the server without committing a secret. Read this once at the start of a session.',
     },
     () => ({
-      messages: [{ role: 'user', content: { type: 'text', text: PASSPORT_GUIDE } }],
+      messages: [{ role: 'user', content: { type: 'text', text: SIGNET_GUIDE } }],
     }),
   )
 
   server.registerTool(
-    'passport_save',
+    'signet_save',
     {
-      title: 'Save a passport entry',
+      title: 'Save a signet entry',
       description:
-        'Persist one entry to the encrypted passport, e.g. "memory/preferences.md". Scanned for credential shapes before encryption (PS-110). Cannot write grants/ (use passport_grant_record) or identity/ (client-managed), and config keys matching the PS-070 denylist are refused.',
+        'Persist one entry to the encrypted signet, e.g. "memory/preferences.md". Scanned for credential shapes before encryption (SN-110). Cannot write grants/ (use signet_grant_record) or identity/ (client-managed), and config keys matching the SN-070 denylist are refused.',
       inputSchema: {
         key: z
           .string()
           .describe(
-            'Entry key: <section>/<path>, section one of memory|config|sessions (grants/ is written only by passport_grant_record; identity/ is client-managed).',
+            'Entry key: <section>/<path>, section one of memory|config|sessions (grants/ is written only by signet_grant_record; identity/ is client-managed).',
           ),
         content: z.string().describe('The entry content (markdown, JSON, transcript chunk).'),
       },
@@ -96,11 +96,11 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
-    'passport_recall',
+    'signet_recall',
     {
       title: 'Recall relevant entries',
       description:
-        'Return the passport entries most relevant to a natural-language query, ranked. Call this before asking the user things a previous session may already know.',
+        'Return the signet entries most relevant to a natural-language query, ranked. Call this before asking the user things a previous session may already know.',
       inputSchema: {
         query: z.string().describe('What you want to remember about.'),
         limit: z.number().int().min(1).max(20).optional().describe('Max results (default 5).'),
@@ -110,9 +110,9 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
-    'passport_search',
+    'signet_search',
     {
-      title: 'Search passport entries',
+      title: 'Search signet entries',
       description: 'Literal keyword/substring search over entry keys and content.',
       inputSchema: {
         query: z.string().describe('Substring to search for.'),
@@ -122,10 +122,10 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
-    'passport_list',
+    'signet_list',
     {
-      title: 'List passport entries',
-      description: 'List the entry keys stored in the passport (no content downloaded).',
+      title: 'List signet entries',
+      description: 'List the entry keys stored in the signet (no content downloaded).',
       inputSchema: {
         section: z
           .enum(SECTIONS)
@@ -137,9 +137,9 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
-    'passport_delete',
+    'signet_delete',
     {
-      title: 'Delete a passport entry',
+      title: 'Delete a signet entry',
       description:
         'Remove one entry. Destructive: the full entry key is required and identity/ or grants/ keys are refused.',
       inputSchema: {
@@ -150,9 +150,9 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
-    'passport_config_get',
+    'signet_config_get',
     {
-      title: 'Read passport config',
+      title: 'Read signet config',
       description: 'Read one config/<key> entry, or every entry under config/ when key is omitted.',
       inputSchema: {
         key: z
@@ -165,11 +165,11 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
-    'passport_config_set',
+    'signet_config_set',
     {
-      title: 'Write passport config',
+      title: 'Write signet config',
       description:
-        'Write config/<key>. Permission-affecting keys (permission, grant, allow, deny, trust, sandbox, exec, approve, policy) are refused per PS-070 — record those as grants instead.',
+        'Write config/<key>. Permission-affecting keys (permission, grant, allow, deny, trust, sandbox, exec, approve, policy) are refused per SN-070 - record those as grants instead.',
       inputSchema: {
         key: z.string().describe('Config key relative to config/, e.g. "settings.json".'),
         value: z.string().describe('The entry content.'),
@@ -179,29 +179,29 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
-    'passport_grant_list',
+    'signet_grant_list',
     {
       title: 'List recorded grants',
       description:
-        'Enumerate the grants recorded under grants/. Read-only: grants are records a consuming harness must re-confirm with the holder before honoring (PS-061); nothing here applies them.',
+        'Enumerate the grants recorded under grants/. Read-only: grants are records a consuming harness must re-confirm with the holder before honoring (SN-061); nothing here applies them.',
     },
     async () => toMcp(await tools.grantList()),
   )
 
   server.registerTool(
-    'passport_grant_record',
+    'signet_grant_record',
     {
       title: 'Record a confirmed grant',
       description:
-        'Record a holder-confirmed permission grant under grants/<id>.json (PS-060/062). The holder must have actually confirmed; pass confirmed: true to attest that. Recording is all this does — no grant is ever auto-applied.',
+        'Record a holder-confirmed permission grant under grants/<id>.json (SN-060/062). The holder must have actually confirmed; pass confirmed: true to attest that. Recording is all this does - no grant is ever auto-applied.',
       inputSchema: {
         id: z.string().describe('Grant id; becomes grants/<id>.json.'),
-        action: z.enum(GRANT_ACTIONS).describe('Action class (PS-060).'),
+        action: z.enum(GRANT_ACTIONS).describe('Action class (SN-060).'),
         scope: z.string().describe('Free-form pattern the consuming harness interprets.'),
         constraints: z
           .record(z.string(), z.unknown())
           .optional()
-          .describe('Free-form matcher fields (PS-060).'),
+          .describe('Free-form matcher fields (SN-060).'),
         granted_by: z.string().optional().describe('Who granted it (default: the holder DID).'),
         granted_at: z.string().optional().describe('ISO timestamp (default: now).'),
         expires_at: z.string().optional().describe('Optional ISO expiry.'),
@@ -215,5 +215,5 @@ export async function main(): Promise<void> {
 
   const transport = new StdioServerTransport()
   await server.connect(transport)
-  stderr(`ready • url=${process.env.PASSPORT_URL ?? DEFAULT_URL} • namespace=${client.namespace}`)
+  stderr(`ready • url=${process.env.SIGNET_URL ?? DEFAULT_URL} • namespace=${client.namespace}`)
 }

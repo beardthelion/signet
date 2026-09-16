@@ -1,38 +1,38 @@
 #!/usr/bin/env bun
 
 /**
- * passport CLI — manage and sync an AI Passport: a DID-rooted, end-to-end
+ * signet CLI - manage and sync a Signet: a DID-rooted, end-to-end
  * encrypted envelope of an agent's working state.
  *
  * Usage:
- *   passport init [--force]       create custody (genesis DID + passphrase) and publish
- *   passport push <dir>           encrypt + upload changed entries from <dir>
- *   passport pull <dir>           verify + download + decrypt into <dir>
- *   passport learn <file>         distill session content into memory/ entries (U7)
- *   passport export <file>        write an encrypted custody bundle (PS-102)
- *   passport import <file>        restore custody from a bundle [--force]
- *   passport rotate               rotate the signing key (PS-050)
- *   passport serve                run the store (lazy import)
- *   passport mcp                  run the stdio MCP server (lazy import)
+ *   signet init [--force]       create custody (genesis DID + passphrase) and publish
+ *   signet push <dir>           encrypt + upload changed entries from <dir>
+ *   signet pull <dir>           verify + download + decrypt into <dir>
+ *   signet learn <file>         distill session content into memory/ entries (U7)
+ *   signet export <file>        write an encrypted custody bundle (SN-102)
+ *   signet import <file>        restore custody from a bundle [--force]
+ *   signet rotate               rotate the signing key (SN-050)
+ *   signet serve                run the store (lazy import)
+ *   signet mcp                  run the stdio MCP server (lazy import)
  *
  * Env:
- *   PASSPORT_URL              default http://localhost:8080
- *   PASSPORT_HOME             state dir, default ~/.passport (custody lives here)
- *   PASSPORT_PASSPHRASE       encryption passphrase (falls back to custody)
- *   PASSPORT_SCAN             block (default) | warn | off — pre-encryption scan
- *   PASSPORT_EXPORT_PASSPHRASE  export-bundle passphrase (else prompted)
+ *   SIGNET_URL              default http://localhost:8080
+ *   SIGNET_HOME             state dir, default ~/.signet (custody lives here)
+ *   SIGNET_PASSPHRASE       encryption passphrase (falls back to custody)
+ *   SIGNET_SCAN             block (default) | warn | off - pre-encryption scan
+ *   SIGNET_EXPORT_PASSPHRASE  export-bundle passphrase (else prompted)
  *
  * Trust boundary: secrets (passphrase, Ed25519 key) only ever live in the
- * 0600 custody file under PASSPORT_HOME or in this process's memory. The
- * store receives ciphertext only (PS-100/PS-034). Key loss is total loss
- * (PS-103) — there is no recovery path, and init says so.
+ * 0600 custody file under SIGNET_HOME or in this process's memory. The
+ * store receives ciphertext only (SN-100/SN-034). Key loss is total loss
+ * (SN-103) - there is no recovery path, and init says so.
  */
 
 import { chmodSync, renameSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { PassportClient } from '../src/client/client.ts'
+import { SignetClient } from '../src/client/client.ts'
 import {
   type CustodySecrets,
   exportBundle,
@@ -62,11 +62,11 @@ async function* walk(dir: string, prefix = ''): AsyncGenerator<string> {
 }
 
 /**
- * Map a passport directory into entry key -> plaintext. Only files under a
+ * Map a signet directory into entry key -> plaintext. Only files under a
  * spec section (memory/, config/, sessions/, grants/, identity/) become
  * entries; anything else is reported and skipped, not silently uploaded.
  */
-async function readPassportDir(dir: string): Promise<Record<string, string>> {
+async function readSignetDir(dir: string): Promise<Record<string, string>> {
   const wanted: string[] = []
   const skipped: string[] = []
   for await (const rel of walk(dir)) {
@@ -90,22 +90,22 @@ async function readPassportDir(dir: string): Promise<Record<string, string>> {
 
 // ─── Custody + client wiring ────────────────────────────────────────────
 
-async function makeClient(): Promise<{ client: PassportClient; secrets: CustodySecrets }> {
+async function makeClient(): Promise<{ client: SignetClient; secrets: CustodySecrets }> {
   const wired = await clientFromCustody()
   if (!wired) {
-    throw new Error('no custody found — run `passport init` or `passport import` first')
+    throw new Error('no custody found - run `signet init` or `signet import` first')
   }
   return wired
 }
 
-/** Persist the manifest seq the client just verified/published (PS-041). */
-async function recordSeq(client: PassportClient, secrets: CustodySecrets): Promise<void> {
+/** Persist the manifest seq the client just verified/published (SN-041). */
+async function recordSeq(client: SignetClient, secrets: CustodySecrets): Promise<void> {
   await persistManifestSeq(client, secrets)
 }
 
 /** The export passphrase: env first, a hidden prompt second. */
 async function exportPassphrase(confirm: boolean): Promise<string> {
-  const env = process.env.PASSPORT_EXPORT_PASSPHRASE
+  const env = process.env.SIGNET_EXPORT_PASSPHRASE
   if (env) return env
   const first = await promptSecret('export passphrase: ')
   if (!confirm || !first) return first
@@ -118,7 +118,7 @@ async function exportPassphrase(confirm: boolean): Promise<string> {
 function promptSecret(question: string): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!process.stdin.isTTY) {
-      reject(new Error('no TTY to prompt on — set PASSPORT_EXPORT_PASSPHRASE instead'))
+      reject(new Error('no TTY to prompt on - set SIGNET_EXPORT_PASSPHRASE instead'))
       return
     }
     const rl = createInterface({ input: process.stdin, terminal: true })
@@ -141,13 +141,13 @@ async function cmdInit(force: boolean): Promise<void> {
   if (existing && !force) {
     throw new Error(
       `custody already exists at ${backend.describe()} (genesis ${existing.genesisDid}). ` +
-        'Refusing to overwrite — a new genesis DID is a new passport. Use --force only if you mean it.',
+        'Refusing to overwrite - a new genesis DID is a new signet. Use --force only if you mean it.',
     )
   }
   const identity = generateIdentity()
-  // A blank/whitespace PASSPORT_PASSPHRASE is unset, not a passphrase: ''
+  // A blank/whitespace SIGNET_PASSPHRASE is unset, not a passphrase: ''
   // fails custody's min(1) and would derive keys from an empty secret.
-  const envPassphrase = process.env.PASSPORT_PASSPHRASE
+  const envPassphrase = process.env.SIGNET_PASSPHRASE
   const fromEnv = envPassphrase !== undefined && envPassphrase.trim() !== ''
   const passphrase = fromEnv ? envPassphrase : generatePassphrase()
   const secrets: CustodySecrets = {
@@ -162,32 +162,32 @@ async function cmdInit(force: boolean): Promise<void> {
   // failed publish can never strand an in-memory-only key.
   await backend.save(secrets)
 
-  const client = new PassportClient({
-    url: process.env.PASSPORT_URL ?? DEFAULT_URL,
+  const client = new SignetClient({
+    url: process.env.SIGNET_URL ?? DEFAULT_URL,
     identity,
     passphrase,
   })
   try {
     await client.init()
-    console.log(`published passport to ${process.env.PASSPORT_URL ?? DEFAULT_URL}`)
+    console.log(`published signet to ${process.env.SIGNET_URL ?? DEFAULT_URL}`)
   } catch (err) {
     console.error(
       `warning: custody is saved but the initial publish failed: ${(err as Error).message}\n` +
-        'A later `passport push` will publish it.',
+        'A later `signet push` will publish it.',
     )
   }
   console.log(`genesis DID: ${identity.did}`)
   console.log(`namespace:   ${namespaceFor(identity.did)}`)
   console.log(`custody:     ${backend.describe()} (0600)`)
   if (!fromEnv) {
-    console.log(`passphrase (shown once — back it up now):\n\n  ${passphrase}\n`)
+    console.log(`passphrase (shown once - back it up now):\n\n  ${passphrase}\n`)
   }
-  console.log('Key loss is total loss (PS-103): there is no recovery path.')
+  console.log('Key loss is total loss (SN-103): there is no recovery path.')
 }
 
 async function cmdPush(dir: string): Promise<void> {
   const { client, secrets } = await makeClient()
-  const entries = await readPassportDir(dir)
+  const entries = await readSignetDir(dir)
   const r = await client.push(entries)
   await recordSeq(client, secrets)
   console.log(
@@ -223,7 +223,7 @@ async function cmdLearn(file: string): Promise<void> {
 
 async function cmdExport(file: string): Promise<void> {
   const secrets = await loadCustody()
-  if (!secrets) throw new Error('no custody found — nothing to export')
+  if (!secrets) throw new Error('no custody found - nothing to export')
   const pass = await exportPassphrase(true)
   // Same discipline as the custody file: write a 0600 tmp, re-assert the
   // mode, then rename so a crash never leaves a half-written or
@@ -238,7 +238,7 @@ async function cmdExport(file: string): Promise<void> {
 async function cmdImport(file: string, force: boolean): Promise<void> {
   const backend = new FileCustodyBackend()
   if ((await backend.load()) && !force) {
-    throw new Error(`custody already exists at ${backend.describe()} — use --force to replace it`)
+    throw new Error(`custody already exists at ${backend.describe()} - use --force to replace it`)
   }
   const pass = await exportPassphrase(false)
   const secrets = importBundle(await readFile(file, 'utf8'), pass)
@@ -250,7 +250,7 @@ async function cmdRotate(): Promise<void> {
   const { client, secrets } = await makeClient()
   const { attestation, successor, chain } = await client.rotate()
   // The successor becomes the active key; the extended chain is what later
-  // /auth/verify calls present (PS-050/052).
+  // /auth/verify calls present (SN-050/052).
   secrets.pkcs8 = successor.pkcs8.toString('base64')
   secrets.attestations = chain
   secrets.manifestSeqs[client.namespace] = client.manifestSeq
@@ -299,7 +299,7 @@ try {
       break
     case 'mcp': {
       // Lazy, and resolved through a URL so type-checking does not require
-      // the MCP server to exist yet — it is invoked-only.
+      // the MCP server to exist yet - it is invoked-only.
       const mcpUrl = new URL('../src/mcp/server.ts', import.meta.url).href
       await (await import(mcpUrl)).main()
       break
@@ -315,15 +315,15 @@ try {
 function usage(): never {
   console.log(
     'usage:\n' +
-      '  passport init [--force]    create custody (genesis DID + passphrase) and publish\n' +
-      '  passport push <dir>        encrypt + upload changed entries from <dir>\n' +
-      '  passport pull <dir>        verify + download + decrypt into <dir>\n' +
-      '  passport learn <file>      distill session content into memory/ entries\n' +
-      '  passport export <file>     write an encrypted custody bundle\n' +
-      '  passport import <file>     restore custody from a bundle [--force]\n' +
-      '  passport rotate            rotate the signing key\n' +
-      '  passport serve             run the passport store\n' +
-      '  passport mcp               run the stdio MCP server',
+      '  signet init [--force]    create custody (genesis DID + passphrase) and publish\n' +
+      '  signet push <dir>        encrypt + upload changed entries from <dir>\n' +
+      '  signet pull <dir>        verify + download + decrypt into <dir>\n' +
+      '  signet learn <file>      distill session content into memory/ entries\n' +
+      '  signet export <file>     write an encrypted custody bundle\n' +
+      '  signet import <file>     restore custody from a bundle [--force]\n' +
+      '  signet rotate            rotate the signing key\n' +
+      '  signet serve             run the signet store\n' +
+      '  signet mcp               run the stdio MCP server',
   )
   process.exit(1)
 }

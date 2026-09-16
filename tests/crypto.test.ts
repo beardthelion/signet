@@ -1,8 +1,8 @@
 /**
- * Crypto conformance tests (PS-030..033).
+ * Crypto conformance tests (SN-030..033).
  *
  * The hard gate: every vector in spec/vectors/crypto.json must reproduce
- * byte-for-byte — the same passphrase + namespace must yield the same
+ * byte-for-byte - the same passphrase + namespace must yield the same
  * keyHex, and the same plaintext the same blob. That is what makes the
  * TypeScript client interchangeable with any other conformant
  * implementation. Then the negative cases: tampered ciphertext, a wrong
@@ -26,11 +26,11 @@ const vectors = JSON.parse(
 const key = () => deriveKey(vectors.passphrase, vectors.namespace)
 
 describe('spec vectors (crypto.json)', () => {
-  test('deriveKey reproduces keyHex exactly (PS-031)', () => {
+  test('deriveKey reproduces keyHex exactly (SN-031)', () => {
     expect(key().toString('hex')).toBe(vectors.keyHex)
   })
 
-  test('encryptEntry reproduces every blob exactly (PS-030/032/033)', () => {
+  test('encryptEntry reproduces every blob exactly (SN-030/032/033)', () => {
     for (const [entryKey, v] of Object.entries(vectors.entries)) {
       expect(encryptEntry(key(), entryKey, v.plaintext)).toBe(v.blob)
     }
@@ -58,7 +58,7 @@ describe('round-trip and fail-closed decryption', () => {
     expect(decryptEntry(k, entryKey, blob)).toBe('state is yours now\n')
   })
 
-  test('encryption is deterministic — same plaintext, same blob', () => {
+  test('encryption is deterministic - same plaintext, same blob', () => {
     expect(encryptEntry(k, entryKey, 'state is yours now\n')).toBe(blob)
   })
 
@@ -68,14 +68,14 @@ describe('round-trip and fail-closed decryption', () => {
     expect(() => decryptEntry(k, entryKey, raw.toString('base64'))).toThrow()
   })
 
-  test('a wrong key fails (PS-031: passphrase or namespace differs)', () => {
-    const wrong = deriveKey(vectors.passphrase, 'passport:did_key_someoneelse')
+  test('a wrong key fails (SN-031: passphrase or namespace differs)', () => {
+    const wrong = deriveKey(vectors.passphrase, 'signet:did_key_someoneelse')
     expect(() => decryptEntry(wrong, entryKey, blob)).toThrow()
     const wrongPass = deriveKey('not the passphrase', vectors.namespace)
     expect(() => decryptEntry(wrongPass, entryKey, blob)).toThrow()
   })
 
-  test('a wrong entry key fails — the key is the AAD (PS-032)', () => {
+  test('a wrong entry key fails - the key is the AAD (SN-032)', () => {
     expect(() => decryptEntry(k, 'memory/other.md', blob)).toThrow()
   })
 

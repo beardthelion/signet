@@ -1,5 +1,5 @@
 /**
- * Fault-injecting stub target — the checker's own conformance proof.
+ * Fault-injecting stub target - the checker's own conformance proof.
  *
  * Implements the SPEC §7 wire contract faithfully (challenge/verify with
  * real Ed25519 signature checks, namespace + entry-key grammar, manifest +
@@ -8,11 +8,11 @@
  * disables one piece of conformant behavior, and tests prove the checker
  * fails exactly the clauses that fault violates:
  *
- *   skipAuth        -> PS-090 (no bearer required, reusable nonces, any sig)
- *   acceptStaleBase -> PS-081 (base precondition ignored; stale writes land)
- *   allowTraversal  -> PS-021 ('..'/'//'/absolute keys pass validation)
- *   leakAccessLog   -> PS-034 (store persists an access.log of bearer tokens)
- *   trustAnyChain   -> PS-052 (attestation chains accepted unchecked)
+ *   skipAuth        -> SN-090 (no bearer required, reusable nonces, any sig)
+ *   acceptStaleBase -> SN-081 (base precondition ignored; stale writes land)
+ *   allowTraversal  -> SN-021 ('..'/'//'/absolute keys pass validation)
+ *   leakAccessLog   -> SN-034 (store persists an access.log of bearer tokens)
+ *   trustAnyChain   -> SN-052 (attestation chains accepted unchecked)
  *
  * Deterministic by construction: nonces and tokens are counters, so nothing
  * random reaches the report.
@@ -43,7 +43,7 @@ export type StubFaults = {
 }
 
 // Same style of small caps the test env uses; reported through the target's
-// `caps` field so the PS-081 probes size themselves correctly.
+// `caps` field so the SN-081 probes size themselves correctly.
 const ENTRY_CAP = 4096
 const SECTION_CAP = 8192
 const IDENTITY_CAP = 65_536
@@ -70,9 +70,9 @@ const json = (body: unknown, status = 200): Response =>
 const apiError = (code: string, status: number, details?: Record<string, unknown>): Response =>
   json({ error: { code, message: code, ...(details ? { details } : {}) } }, status)
 
-/** Decode `passport:did_<method>_<id>` back to `did:<method>:<id>`. */
+/** Decode `signet:did_<method>_<id>` back to `did:<method>:<id>`. */
 function genesisOf(ns: string): string {
-  const enc = ns.slice('passport:'.length)
+  const enc = ns.slice('signet:'.length)
   const a = enc.indexOf('_')
   const b = enc.indexOf('_', a + 1)
   return `${enc.slice(0, a)}:${enc.slice(a + 1, b)}:${enc.slice(b + 1)}`
@@ -146,7 +146,7 @@ export function makeStubTarget(faults: StubFaults = {}, name = 'stub'): CheckTar
     }
   }
   const writeChain = (genesis: string, chain: RotationAttestation[]) => {
-    const slug = sha256Hex(`passport:${genesis.replaceAll(':', '_')}`)
+    const slug = sha256Hex(`signet:${genesis.replaceAll(':', '_')}`)
     const stored = readChain(slug)
     // The longer valid chain wins; a shorter one never truncates history.
     if (stored === null || verifyChain(stored) === null || chain.length > stored.length) {
@@ -156,7 +156,7 @@ export function makeStubTarget(faults: StubFaults = {}, name = 'stub'): CheckTar
 
   /** Entry-key validation; the allowTraversal fault drops only the
    *  traversal/separator rules ('..', '//', leading/trailing '/', '\', NUL)
-   *  and additionally tolerates '.'/'..' path parts — the realistic shape of
+   *  and additionally tolerates '.'/'..' path parts - the realistic shape of
    *  a validator that forgot dot-segments. Section, segment charset, and the
    *  sessions structure still apply. */
   const validKey = (key: string): boolean => {
@@ -194,7 +194,7 @@ export function makeStubTarget(faults: StubFaults = {}, name = 'stub'): CheckTar
     const path = url.pathname
     const method = req.method
 
-    if (path === '/health') return json({ ok: true, service: 'passport-store-stub' })
+    if (path === '/health') return json({ ok: true, service: 'signet-store-stub' })
 
     if (path === '/auth/challenge' && method === 'POST') {
       const nonce = `nonce-${++counter}`
@@ -224,7 +224,7 @@ export function makeStubTarget(faults: StubFaults = {}, name = 'stub'): CheckTar
         if (
           !verifyDidSignature(
             body.did,
-            new TextEncoder().encode(`passport-auth:${body.nonce}`),
+            new TextEncoder().encode(`signet-auth:${body.nonce}`),
             body.sig,
           )
         ) {
@@ -248,11 +248,11 @@ export function makeStubTarget(faults: StubFaults = {}, name = 'stub'): CheckTar
       return json({ token, expiresAt: new Date(Date.now() + 600_000).toISOString() })
     }
 
-    if (!path.startsWith('/passport/')) return apiError('not_found', 404)
+    if (!path.startsWith('/signet/')) return apiError('not_found', 404)
 
     let rest: string
     try {
-      rest = decodeURIComponent(path.slice('/passport/'.length))
+      rest = decodeURIComponent(path.slice('/signet/'.length))
     } catch {
       return apiError('not_found', 404)
     }
@@ -279,7 +279,7 @@ export function makeStubTarget(faults: StubFaults = {}, name = 'stub'): CheckTar
     }
 
     // The leakAccessLog fault: persist the caller's bearer token alongside
-    // the passport data — outside the manifest-plus-blobs layout.
+    // the signet data - outside the manifest-plus-blobs layout.
     if (faults.leakAccessLog && auth) {
       const logPath = `ns/${slug}/access.log`
       const prior = objects.get(logPath) ?? new Uint8Array()

@@ -1,18 +1,18 @@
 {
-  "specVersion": "passport-spec/0.1",
+  "specVersion": "signet-spec/0.1",
   "manifest": {
     "seq": 1,
-    "specVersion": "passport-spec/0.1",
-    "genesisDid": "did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
+    "specVersion": "signet-spec/0.1",
+    "genesisDid": "did:key:z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq",
     "entries": {
-      "memory/MEMORY.md": "sha256:9e1da45000e3246fc4996be51f3425e6f2b0c91868a6e9e15528960ddbf97719",
-      "config/settings.json": "sha256:5285fff7f44288b674426ed0f6ea6334285a7cf22a690f9021380f77b27c3c5d",
-      "grants/grant-001.json": "sha256:43d21cb5914c26fe4955a58fe21f1bc496dbb21484e483d2d00e21ea6ca7fa96",
-      "identity/did.json": "sha256:030836f68c584140628d5e0f39d36eac99219090cf24292628edcaeda3e007cf",
-      "sessions/demo/000001": "sha256:8780321f7f706e3a70790980f6f17bb56a961cbe8f2161ddc9686e50da1da5b3",
-      "sessions/demo/000002": "sha256:25c92b96e519e0d531a24b2163d7aee1c259db5ab1730ec6091477602f7f6b4a"
+      "memory/MEMORY.md": "sha256:607d8422efa89d7dfbf1705ed0ff050c76d0c93da55a47a5c948ac6851cf3108",
+      "config/settings.json": "sha256:c7033e873c72cc0625e4701df7118e79125d49209421ee68f8e947cb6cfc1ca9",
+      "grants/grant-001.json": "sha256:68c268c0fe5fccc6137b1a42bffcf813d94a96abd4fdd445e14497d25cd5047c",
+      "identity/did.json": "sha256:cddbc3f482fd65c24086b0a735cddc23ddd070abfaf32d694aeeb3b25b8cf50c",
+      "sessions/demo/000001": "sha256:70e09039b4eea77f085851daea6c36917d7321d344cb3f8e93256b99edb193a9",
+      "sessions/demo/000002": "sha256:9b19e152f79311eaf9b9f7f4d54e494a982787790fc45ebf51afbb3c7caa965f"
     }
   },
-  "did": "did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
-  "sig": "PQE5LprYDByPRDMByTmdI0FtW+WGs1epsfyrwLv6ZM4Cr23MFqymxPS0nILOL2TSboFk2fXG7ufE7a8XoDYHBQ=="
+  "did": "did:key:z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq",
+  "sig": "dh2ZgvEXUnHIf2MgyMbHBe02VlkPM2WP09p2dIQxZ2guc8cP0IBdfuewrf3+ApZLjZulsRG/VEG92rAY+drHBw=="
 }

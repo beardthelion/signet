@@ -1,15 +1,15 @@
 /**
  * Holder identity: did:key generation, signing, and rotation attestations.
  *
- * A passport is rooted at exactly one genesis DID (PS-010): a `did:key`
- * Ed25519 identity created at `passport init`. The private key is one of the
- * two secrets that govern the passport (PS-100) — it lives client-side only,
+ * A signet is rooted at exactly one genesis DID (SN-010): a `did:key`
+ * Ed25519 identity created at `signet init`. The private key is one of the
+ * two secrets that govern the signet (SN-100) - it lives client-side only,
  * inside the custody store, and is never sent to a server. What crosses the
  * wire is the DID itself (public), Ed25519 signatures over server nonces and
  * canonical-JSON documents, and rotation attestations.
  *
- * The DID encoding (PS-001) is `did:key:z` + base58btc(0xed01 || pubkey).
- * base58btc is implemented locally — zero dependencies — and matches the
+ * The DID encoding (SN-001) is `did:key:z` + base58btc(0xed01 || pubkey).
+ * base58btc is implemented locally - zero dependencies - and matches the
  * encoder in scripts/gen-vectors.ts byte for byte, so the shared vectors in
  * spec/vectors/{identity,rotation}.json reproduce exactly.
  *
@@ -34,7 +34,7 @@ import type { RotationAttestation } from '../types/index.ts'
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 
-/** base58btc encode with the multibase 'z' prefix (PS-001). */
+/** base58btc encode with the multibase 'z' prefix (SN-001). */
 export function base58btc(bytes: Uint8Array): string {
   const digits = [0]
   for (const b of bytes) {
@@ -97,9 +97,9 @@ export type Identity = {
   /** Ed25519 private key (never leaves the custody store). */
   privateKey: KeyObject
   publicKey: KeyObject
-  /** Raw 32-byte public key — what the DID carries. */
+  /** Raw 32-byte public key - what the DID carries. */
   publicKeyRaw: Buffer
-  /** PKCS8 DER of the private key — the custody/export encoding (PS-100). */
+  /** PKCS8 DER of the private key - the custody/export encoding (SN-100). */
   pkcs8: Buffer
 }
 
@@ -113,7 +113,7 @@ function identityFromKeyObject(privateKey: KeyObject): Identity {
   return { did, privateKey, publicKey, publicKeyRaw, pkcs8 }
 }
 
-/** Generate a fresh Ed25519 identity — the genesis key of a new passport. */
+/** Generate a fresh Ed25519 identity - the genesis key of a new signet. */
 export function generateIdentity(): Identity {
   const { privateKey } = generateKeyPairSync('ed25519')
   return identityFromKeyObject(privateKey)
@@ -127,7 +127,7 @@ export function identityFromPkcs8(der: Buffer | Uint8Array): Identity {
 }
 
 /**
- * Rebuild an identity from a raw 32-byte Ed25519 seed. Deterministic — the
+ * Rebuild an identity from a raw 32-byte Ed25519 seed. Deterministic - the
  * path spec vectors and tests use to pin identities.
  */
 export function identityFromSeed(seed: Buffer | Uint8Array): Identity {
@@ -181,11 +181,11 @@ export function canonicalJson(value: unknown): string {
 /**
  * Domain-separation prefix for /auth/verify signatures (SPEC §7.1). The same
  * Ed25519 key signs rotation attestations and integrity manifests, so the
- * challenge preimage is the UTF-8 bytes of `passport-auth:` + nonce — a
+ * challenge preimage is the UTF-8 bytes of `signet-auth:` + nonce - a
  * server-chosen nonce can then never collide with a document this key would
  * sign for another purpose.
  */
-export const AUTH_PREIMAGE_PREFIX = 'passport-auth:'
+export const AUTH_PREIMAGE_PREFIX = 'signet-auth:'
 
 /** Ed25519-sign a message (string = UTF-8 bytes), base64 result. */
 export function signMessage(privateKey: KeyObject, message: string | Uint8Array): string {
@@ -215,37 +215,37 @@ export function verifyDidSignature(
   }
 }
 
-// ─── Namespaces (PS-011) ────────────────────────────────────────────────
+// ─── Namespaces (SN-011) ────────────────────────────────────────────────
 
-/** `did:key:z6Mk...` -> `did_key_z6Mk...` — the injective namespace encoding. */
+/** `did:key:z6Mk...` -> `did_key_z6Mk...` - the injective namespace encoding. */
 export function encodeDid(did: string): string {
   return did.replaceAll(':', '_')
 }
 
-/** The namespace a genesis DID owns: `passport:<encoded did>` (PS-011). */
+/** The namespace a genesis DID owns: `signet:<encoded did>` (SN-011). */
 export function namespaceFor(did: string): string {
-  return `passport:${encodeDid(did)}`
+  return `signet:${encodeDid(did)}`
 }
 
-// ─── Rotation attestations (PS-050/051) ─────────────────────────────────
+// ─── Rotation attestations (SN-050/051) ─────────────────────────────────
 
-/** prevHash of the first attestation in a chain (PS-051). */
+/** prevHash of the first attestation in a chain (SN-051). */
 export const GENESIS_PREV_HASH = '0'.repeat(64)
 
-/** sha256 hex of a string — the attestation hash linkage. */
+/** sha256 hex of a string - the attestation hash linkage. */
 export function sha256Hex(s: string): string {
   return createHash('sha256').update(s).digest('hex')
 }
 
-/** sha256 hex of an attestation's canonical JSON — the next link's prevHash. */
+/** sha256 hex of an attestation's canonical JSON - the next link's prevHash. */
 export function attestationHash(att: RotationAttestation): string {
   return sha256Hex(canonicalJson(att))
 }
 
 /**
- * Build a rotation attestation (PS-051): the predecessor key signs the
+ * Build a rotation attestation (SN-051): the predecessor key signs the
  * canonical JSON of `{genesisDid, newDid, seq, prevHash}`. The successor's
- * own signature is not part of the document — control of the old key is the
+ * own signature is not part of the document - control of the old key is the
  * whole authorization.
  */
 export function buildRotationAttestation(opts: {

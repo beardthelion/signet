@@ -1,10 +1,10 @@
 /**
- * DID auth and rotation-chain authorization (PS-090, PS-050..053).
+ * DID auth and rotation-chain authorization (SN-090, SN-050..053).
  *
  * The cases are deliberately adversarial: replayed nonces, signatures by the
  * wrong key, chains that are forged, misordered, mis-linked, or terminate at
  * a different DID than the requester's. A regression here is a cross-holder
- * passport leak.
+ * signet leak.
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -52,7 +52,7 @@ describe('challenge/verify', () => {
     const sig = signNonceB64(id.priv, nonce)
     const first = await verifyRaw(id.did, nonce, sig)
     expect(first.status).toBe(200)
-    // The SAME nonce a second time — even with a fresh valid signature.
+    // The SAME nonce a second time - even with a fresh valid signature.
     const replay = await verifyRaw(id.did, nonce, signNonceB64(id.priv, nonce))
     expect(replay.status).toBe(401)
     expect(((await replay.json()) as { error: { code: string } }).error.code).toBe('invalid_nonce')
@@ -64,7 +64,7 @@ describe('challenge/verify', () => {
     const issued = issueChallenge(t0)
     expect(issued).not.toBeNull()
     // Past the 120 s TTL the nonce must not verify, and consuming it removes
-    // it either way — it cannot come back.
+    // it either way - it cannot come back.
     expect(consumeNonce(issued!.nonce, t0 + 121_000)).toBe(false)
     expect(consumeNonce(issued!.nonce, t0)).toBe(false)
   })
@@ -76,7 +76,7 @@ describe('challenge/verify', () => {
 
   test('a signature over the bare nonce (no domain prefix) is rejected', async () => {
     // Pre-domain-separation signing must fail: the preimage is the UTF-8
-    // bytes of "passport-auth:" + nonce, nothing else.
+    // bytes of "signet-auth:" + nonce, nothing else.
     const { signB64 } = await import('./setup.ts')
     const { nonce } = await challenge()
     const res = await verifyRaw(id.did, nonce, signB64(id.priv, nonce))
@@ -100,19 +100,19 @@ describe('challenge/verify', () => {
 
   test('a did:key string that is not an Ed25519 key cannot verify', async () => {
     const { nonce } = await challenge()
-    // Grammar-valid did:key, garbage payload — no key to verify against.
+    // Grammar-valid did:key, garbage payload - no key to verify against.
     const res = await verifyRaw('did:key:z6Mk', nonce, signNonceB64(id.priv, nonce))
     expect(res.status).toBe(401)
   })
 })
 
-describe('bearer authorization on /passport/', () => {
+describe('bearer authorization on /signet/', () => {
   const owner = identity('authz-owner')
   const intruder = identity('authz-intruder')
 
   test('no bearer -> 401', async () => {
     const res = await authed('', 'GET', nsPath(owner.namespace))
-    // authed('') still sends `Bearer ` — also cover a request with no header.
+    // authed('') still sends `Bearer ` - also cover a request with no header.
     const { handleRequest } = await import('../src/server/handler.ts')
     const bare = await handleRequest(new Request(`http://x${nsPath(owner.namespace)}`))
     for (const r of [res, bare]) {
@@ -128,7 +128,7 @@ describe('bearer authorization on /passport/', () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('forbidden')
   })
 
-  test('PS-053: a successor key cannot open the namespace without its chain', async () => {
+  test('SN-053: a successor key cannot open the namespace without its chain', async () => {
     // The successor DID is not the genesis DID; with no stored/presented
     // attestation it is just another unauthorized key.
     const successor = identity('authz-successor')
@@ -138,7 +138,7 @@ describe('bearer authorization on /passport/', () => {
   })
 })
 
-describe('rotation attestation chains (PS-051/PS-052)', () => {
+describe('rotation attestation chains (SN-051/SN-052)', () => {
   const genesis = identity('rot-genesis')
   const r1 = identity('rot-successor-1')
   const r2 = identity('rot-successor-2')
@@ -163,7 +163,7 @@ describe('rotation attestation chains (PS-051/PS-052)', () => {
 
   test('a persisted chain keeps authorizing without re-presentation', async () => {
     // Self-contained: verify once WITH the chain (persists it), then a fresh
-    // token carrying no attestations must still be authorized (PS-052 via
+    // token carrying no attestations must still be authorized (SN-052 via
     // the stored chain).
     const g = identity('rot-persisted-genesis')
     const s = identity('rot-persisted-successor')
@@ -198,7 +198,7 @@ describe('rotation attestation chains (PS-051/PS-052)', () => {
 
   test('a chain terminating at a different DID does not authorize the caller', async () => {
     const { a1 } = chain()
-    // r2 presents a chain that ends at r1 — proves r1's authority, not r2's.
+    // r2 presents a chain that ends at r1 - proves r1's authority, not r2's.
     const res = await tokenFor(r2, [a1])
     expect(res.status).toBe(401)
   })
@@ -212,7 +212,7 @@ describe('rotation attestation chains (PS-051/PS-052)', () => {
     const s = identity('rot-cross-successor')
     const a = makeAttestation(otherGenesis, otherGenesis.priv, s, 1, ZERO)
     const res = await tokenFor(s, [a])
-    // The chain is valid — but rooted at otherGenesis, so it persists under
+    // The chain is valid - but rooted at otherGenesis, so it persists under
     // otherGenesis's namespace and authorizes s THERE, never at g.
     expect(res.status).toBe(200)
     const { token } = (await res.json()) as { token: string }

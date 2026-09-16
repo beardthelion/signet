@@ -1,7 +1,7 @@
 /**
  * S3-compatible BlobStore adapter (Tigris, Cloudflare R2, AWS S3, minio).
  *
- * Uses Bun's built-in S3 client — no SDK dependency. Pair a PRIVATE bucket
+ * Uses Bun's built-in S3 client - no SDK dependency. Pair a PRIVATE bucket
  * with the crypto-blind server and the data at rest is ciphertext in a bucket
  * nobody can list publicly.
  */
@@ -16,7 +16,7 @@ type S3Settings = {
   secretAccessKey: string
 }
 
-/** Bound on list() pagination — see list(). */
+/** Bound on list() pagination - see list(). */
 const MAX_LIST_PAGES = 1000
 
 export class S3BlobStore implements BlobStore {
@@ -48,7 +48,7 @@ export class S3BlobStore implements BlobStore {
     } catch (err) {
       // Bun throws on a missing object; treat "not found" as null. Classify
       // on the structured code/status the S3 error carries, not the message
-      // text — message wording is not an API contract.
+      // text - message wording is not an API contract.
       const e = err as { code?: string; name?: string; status?: number } & Error
       const status = e?.status ?? (e as { $status?: number }).$status
       if (e?.code === 'NoSuchKey' || e?.name === 'NoSuchKey' || status === 404) {

@@ -1,8 +1,8 @@
 /**
  * Filesystem BlobStore adapter.
  *
- * Zero-config default — ideal for self-host and local mode. Stores each blob
- * as a file under PASSPORT_DATA_DIR. Writes are atomic (write temp + rename)
+ * Zero-config default - ideal for self-host and local mode. Stores each blob
+ * as a file under SIGNET_DATA_DIR. Writes are atomic (write temp + rename)
  * so a crash mid-write can't leave a half-written manifest.
  */
 

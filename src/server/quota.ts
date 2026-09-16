@@ -1,11 +1,11 @@
 /**
- * Storage caps (PS-081).
+ * Storage caps (SN-081).
  *
  * The spec bounds every section, every entry, and the namespace total so a
- * passport stays a bounded envelope rather than arbitrary file storage. The
- * defaults below are the spec values; PASSPORT_CAP_* env vars retune them for
+ * signet stays a bounded envelope rather than arbitrary file storage. The
+ * defaults below are the spec values; SIGNET_CAP_* env vars retune them for
  * a deployment. (The spec's section "floors" are the minimums a conformant
- * store must allow — a deployment SHOULD NOT set a cap below the spec
+ * store must allow - a deployment SHOULD NOT set a cap below the spec
  * default. Tests deliberately set tiny caps.)
  *
  * Per-entry overage is a per-key skip (the caller is told, never a silent
@@ -21,19 +21,19 @@ const MiB = 1024 * KiB
 
 export const caps = {
   /** Ciphertext bytes any single entry may hold. */
-  entry: envInt('PASSPORT_CAP_ENTRY', 1 * MiB),
+  entry: envInt('SIGNET_CAP_ENTRY', 1 * MiB),
   /** Ciphertext bytes per section, summed over that section's entries. */
   sections: {
-    memory: envInt('PASSPORT_CAP_MEMORY', 5 * MiB),
-    config: envInt('PASSPORT_CAP_CONFIG', 1 * MiB),
-    sessions: envInt('PASSPORT_CAP_SESSIONS', 20 * MiB),
-    grants: envInt('PASSPORT_CAP_GRANTS', 512 * KiB),
-    identity: envInt('PASSPORT_CAP_IDENTITY', 256 * KiB),
+    memory: envInt('SIGNET_CAP_MEMORY', 5 * MiB),
+    config: envInt('SIGNET_CAP_CONFIG', 1 * MiB),
+    sessions: envInt('SIGNET_CAP_SESSIONS', 20 * MiB),
+    grants: envInt('SIGNET_CAP_GRANTS', 512 * KiB),
+    identity: envInt('SIGNET_CAP_IDENTITY', 256 * KiB),
   } as Record<Section, number>,
   /** Total ciphertext bytes in one namespace. */
-  total: envInt('PASSPORT_CAP_TOTAL', 30 * MiB),
+  total: envInt('SIGNET_CAP_TOTAL', 30 * MiB),
   /** Gateway cap on a whole PUT body (base64 inflates ciphertext ~4/3). */
-  body: envInt('PASSPORT_MAX_BODY_BYTES', 48 * MiB),
+  body: envInt('SIGNET_MAX_BODY_BYTES', 48 * MiB),
 } as const
 
 /** Thrown when a projected write would exceed a cap. Surfaces as HTTP 413. */
@@ -57,7 +57,7 @@ export function sectionOf(key: string): Section {
  * Enforce per-section and per-namespace byte caps against a projected
  * post-write manifest (`entryKey -> {size}`). Runs after per-entry checks but
  * BEFORE any store write, so an over-cap request leaves the namespace
- * untouched — the all-or-nothing half of PS-081.
+ * untouched - the all-or-nothing half of SN-081.
  */
 export function checkProjectedCaps(entries: Record<string, { size: number }>): void {
   const sectionBytes = new Map<Section, number>()

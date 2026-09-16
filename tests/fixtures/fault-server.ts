@@ -1,6 +1,6 @@
 /**
  * Runnable fault stub: serves makeStubTarget over a real socket so the
- * passport-check CLI can be exercised end to end against a non-conformant
+ * signet-check CLI can be exercised end to end against a non-conformant
  * target.
  *
  *   bun run tests/fixtures/fault-server.ts <fault> [port]

@@ -1,5 +1,5 @@
 /**
- * Per-identity token-bucket rate limiter (in-memory — single machine, like the
+ * Per-identity token-bucket rate limiter (in-memory - single machine, like the
  * locks in lock.ts; a multi-instance deployment would need a shared store).
  * Refills at `perMinute` tokens/min up to `burst` capacity. Each request costs
  * one token.
@@ -18,11 +18,11 @@
 
 import { envInt } from './env.ts'
 
-const perMinute = envInt('PASSPORT_RATE_PER_MINUTE', 240)
-const CAP = envInt('PASSPORT_RATE_BURST', 480)
+const perMinute = envInt('SIGNET_RATE_PER_MINUTE', 240)
+const CAP = envInt('SIGNET_RATE_BURST', 480)
 const REFILL_PER_MS = perMinute / 60_000
 
-/** Time for an empty bucket to refill to capacity — one refill window. */
+/** Time for an empty bucket to refill to capacity - one refill window. */
 const REFILL_WINDOW_MS = perMinute > 0 ? CAP / REFILL_PER_MS : 0
 /** Buckets idle this long have certainly refilled to CAP; safe to drop. */
 const IDLE_EVICT_MS = REFILL_WINDOW_MS * 3
@@ -31,7 +31,7 @@ const EVICT_THRESHOLD = 4096
 /**
  * Hard ceiling on the bucket map. Idle eviction keeps the steady state
  * small; this is the stop-loss for a flood of distinct keys inside one idle
- * window — past it, NEW keys are refused rather than growing the map without
+ * window - past it, NEW keys are refused rather than growing the map without
  * bound. Known keys keep their buckets.
  */
 const MAX_BUCKETS = 100_000

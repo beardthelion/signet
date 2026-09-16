@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "passport-suite/conformance-report",
-  "title": "AI Passport conformance report",
+  "$id": "signet/conformance-report",
+  "title": "Signet conformance report",
   "type": "object",
   "required": ["specVersion", "target", "generatedBy", "results", "summary"],
   "properties": {
-    "specVersion": { "type": "string", "pattern": "^passport-spec/[0-9]+\\.[0-9]+$" },
+    "specVersion": { "type": "string", "pattern": "^signet-spec/[0-9]+\\.[0-9]+$" },
     "target": { "type": "string" },
     "generatedBy": { "type": "string" },
     "results": {
@@ -14,7 +14,7 @@
         "type": "object",
         "required": ["clause", "status"],
         "properties": {
-          "clause": { "type": "string", "pattern": "^PS-[0-9]{3}$" },
+          "clause": { "type": "string", "pattern": "^SN-[0-9]{3}$" },
           "status": { "enum": ["pass", "fail", "unsupported"] },
           "detail": { "type": "string" }
         },

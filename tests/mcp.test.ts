@@ -1,22 +1,22 @@
 /**
  * MCP adapter tests: tools.ts is driven transport-free against a real
- * PassportClient wired to an in-process stub of the wire contract (SPEC §7),
+ * SignetClient wired to an in-process stub of the wire contract (SPEC §7),
  * so every tool call goes through the actual encrypt -> HTTP -> ciphertext
  * -> decrypt path with no socket and no stdio.
  *
  * Covered: save/recall round-trip, search, list, delete, config_get/set with
- * the PS-070 denylist, grant_list/grant_record with the PS-062 confirmation
- * gate and the PS-061 no-application guarantee, the secret-scan refusal
- * (PS-110), the ciphertext-only store boundary (PS-034), and stdout protocol
+ * the SN-070 denylist, grant_list/grant_record with the SN-062 confirmation
+ * gate and the SN-061 no-application guarantee, the secret-scan refusal
+ * (SN-110), the ciphertext-only store boundary (SN-034), and stdout protocol
  * integrity: no tool path may write to stdout, which is the MCP channel.
  */
 
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { MANIFEST_ENTRY_KEY, PassportClient, PassportHttpError } from '../src/client/client.ts'
+import { MANIFEST_ENTRY_KEY, SignetClient, SignetHttpError } from '../src/client/client.ts'
 import { generateIdentity, verifyDidSignature } from '../src/client/identity.ts'
-import { makeTools, type PassportToolClient } from '../src/mcp/tools.ts'
+import { makeTools, type SignetToolClient } from '../src/mcp/tools.ts'
 
 // ─── In-process wire stub ───────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ const apiError = (code: string, status: number) => json({ error: { code, message
  * A minimal but honest store: challenge/verify auth (signatures really are
  * verified), the hashes and integrity views, single-entry reads, and a delta
  * upsert honoring the base precondition and deletions. Everything stored is
- * the ciphertext blob exactly as it arrived — which is what lets the leak
+ * the ciphertext blob exactly as it arrived - which is what lets the leak
  * test below read it all back.
  */
 function makeStub() {
@@ -77,7 +77,7 @@ function makeStub() {
     if (path === '/auth/verify' && method === 'POST') {
       const { did, nonce, sig } = body as { did: string; nonce: string; sig: string }
       if (!nonces.delete(nonce)) return apiError('invalid_nonce', 401)
-      if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${nonce}`), sig)) {
+      if (!verifyDidSignature(did, new TextEncoder().encode(`signet-auth:${nonce}`), sig)) {
         return apiError('invalid_signature', 401)
       }
       const token = `tok-${++counter}`
@@ -85,13 +85,13 @@ function makeStub() {
       return json({ token, expiresAt: new Date(Date.now() + 600_000).toISOString() })
     }
 
-    if (!path.startsWith('/passport/')) return apiError('not_found', 404)
+    if (!path.startsWith('/signet/')) return apiError('not_found', 404)
     const auth = /Bearer\s+(.+)/.exec(
       String((init?.headers as Record<string, string>)?.authorization ?? ''),
     )
     if (!auth || !tokens.has(auth[1]!)) return apiError('unauthorized', 401)
 
-    const rest = decodeURIComponent(path.slice('/passport/'.length))
+    const rest = decodeURIComponent(path.slice('/signet/'.length))
     const slash = rest.indexOf('/')
     const ns = slash === -1 ? rest : rest.slice(0, slash)
     const entryKey = slash === -1 ? null : rest.slice(slash + 1)
@@ -145,7 +145,7 @@ function makeStub() {
 
   return {
     fetchFn: fetchFn as typeof fetch,
-    /** Every ciphertext byte the store holds — for the leak-boundary test. */
+    /** Every ciphertext byte the store holds - for the leak-boundary test. */
     allCiphertext(): string {
       return [...blobs.values()].map(b => b.toString('utf8')).join('\n')
     },
@@ -159,7 +159,7 @@ const PASS = 'mcp test passphrase'
 function rig() {
   const stub = makeStub()
   const id = generateIdentity()
-  const client = new PassportClient({
+  const client = new SignetClient({
     url: 'http://stub',
     fetchFn: stub.fetchFn,
     identity: id,
@@ -181,11 +181,11 @@ function rig() {
  * type-check error rather than a test that silently exercises a contract
  * nobody ships.
  */
-export const clientSatisfiesToolClient: PassportToolClient = null as unknown as PassportClient
+export const clientSatisfiesToolClient: SignetToolClient = null as unknown as SignetClient
 
 // ─── Round trips ────────────────────────────────────────────────────────
 
-describe('passport tools over the real encrypted wire path', () => {
+describe('signet tools over the real encrypted wire path', () => {
   test('save then recall returns the entry', async () => {
     const { tools } = rig()
     const saved = await tools.save(
@@ -231,8 +231,8 @@ describe('passport tools over the real encrypted wire path', () => {
   test('list filters keys the unsigned view should not have carried', async () => {
     // The hashes view is unsigned store output; a hostile store could answer
     // with arbitrary strings. Only EntryKey-valid keys may reach the model.
-    const fake: PassportToolClient = {
-      namespace: 'passport:did_key_x',
+    const fake: SignetToolClient = {
+      namespace: 'signet:did_key_x',
       push: () => Promise.reject(new Error('unused')),
       pull: () => Promise.resolve({ namespace: 'x', seq: 0, entries: {} }),
       hashes: () =>
@@ -308,7 +308,7 @@ describe('passport tools over the real encrypted wire path', () => {
     expect(d.isError).toBe(true)
   })
 
-  test('the store only ever holds ciphertext (PS-034)', async () => {
+  test('the store only ever holds ciphertext (SN-034)', async () => {
     const { stub, tools } = rig()
     await tools.save('memory/secret-sounding-note.md', 'the passphrase hint is unobtainium\n')
     await tools.configSet('settings.json', '{"marker":"cleartext-marker-123"}\n')
@@ -319,7 +319,7 @@ describe('passport tools over the real encrypted wire path', () => {
   })
 })
 
-// ─── Config (PS-070) ────────────────────────────────────────────────────
+// ─── Config (SN-070) ────────────────────────────────────────────────────
 
 describe('config tools', () => {
   test('config_set then config_get round-trips, and bare get lists config/', async () => {
@@ -340,25 +340,25 @@ describe('config tools', () => {
     expect(r.text).toMatch(/no config entry/i)
   })
 
-  test('config_set rejects the PS-070 denylist, on any segment', async () => {
+  test('config_set rejects the SN-070 denylist, on any segment', async () => {
     const { tools } = rig()
     for (const key of ['permissions.json', 'ui/sandbox.json', 'exec-policy.json', 'trust.list']) {
       const r = await tools.configSet(key, 'x')
       expect(r.isError).toBe(true)
-      expect(r.text).toContain('PS-070')
+      expect(r.text).toContain('SN-070')
     }
     // A lookalike key that carries none of the denied words still passes.
     expect((await tools.configSet('appearance.json', '{}\n')).isError).toBeUndefined()
   })
 
-  test('passport_save cannot route around the denylist into config/', async () => {
+  test('signet_save cannot route around the denylist into config/', async () => {
     const { tools } = rig()
     const r = await tools.save('config/permissions.json', '{"all":true}\n')
     expect(r.isError).toBe(true)
   })
 })
 
-// ─── Grants (PS-060..062) ───────────────────────────────────────────────
+// ─── Grants (SN-060..062) ───────────────────────────────────────────────
 
 describe('grant tools', () => {
   const grantInput = {
@@ -387,7 +387,7 @@ describe('grant tools', () => {
     expect(listed.text).toMatch(/re-confirm|records only/i)
   })
 
-  test('grant_record validates the PS-060 vocabulary and the entry key', async () => {
+  test('grant_record validates the SN-060 vocabulary and the entry key', async () => {
     const { tools } = rig()
     const badAction = await tools.grantRecord({ ...grantInput, action: 'shell.read' })
     expect(badAction.isError).toBe(true)
@@ -395,17 +395,17 @@ describe('grant tools', () => {
     expect(badId.isError).toBe(true)
   })
 
-  test('grants cannot be written through passport_save (PS-062)', async () => {
+  test('grants cannot be written through signet_save (SN-062)', async () => {
     const { tools } = rig()
     const r = await tools.save(
       'grants/sneaky.json',
       '{"id":"x","action":"shell.exec","scope":"*","granted_by":"e","granted_at":"t"}\n',
     )
     expect(r.isError).toBe(true)
-    expect(r.text).toContain('passport_grant_record')
+    expect(r.text).toContain('signet_grant_record')
   })
 
-  test('no tool exposes grant application (PS-061)', async () => {
+  test('no tool exposes grant application (SN-061)', async () => {
     const { tools } = rig()
     // Exactly the nine specified verbs, and nothing that sounds like it could
     // honor, apply, enforce, or consume a grant.
@@ -429,7 +429,7 @@ describe('grant tools', () => {
 // ─── Refusals and diagnostics ───────────────────────────────────────────
 
 describe('refusals and the stdout boundary', () => {
-  test('the pre-encryption secret scan blocks a save (PS-110)', async () => {
+  test('the pre-encryption secret scan blocks a save (SN-110)', async () => {
     const { tools } = rig()
     const r = await tools.save('memory/leak.md', `token: ghp_${'a'.repeat(30)}\n`)
     expect(r.isError).toBe(true)
@@ -437,11 +437,11 @@ describe('refusals and the stdout boundary', () => {
   })
 
   test('a store refusal becomes a readable error, not a raw dump', async () => {
-    const errClient: PassportToolClient = {
-      namespace: 'passport:did_key_x',
+    const errClient: SignetToolClient = {
+      namespace: 'signet:did_key_x',
       push: () => {
-        throw new PassportHttpError(
-          'passport 429: {"error":{"code":"rate_limited"}}',
+        throw new SignetHttpError(
+          'signet 429: {"error":{"code":"rate_limited"}}',
           429,
           'rate_limited',
         )
@@ -456,7 +456,7 @@ describe('refusals and the stdout boundary', () => {
     expect(r.text).not.toContain('{"error"')
   })
 
-  test('onSync fires after writes so PS-041 state can persist', async () => {
+  test('onSync fires after writes so SN-041 state can persist', async () => {
     const { tools, synced } = rig()
     await tools.save('memory/a.md', 'a\n')
     expect(synced.length).toBeGreaterThan(0)

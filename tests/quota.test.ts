@@ -1,14 +1,14 @@
 /**
- * Cap enforcement (PS-081).
+ * Cap enforcement (SN-081).
  *
  * Caps come from tests/setup.ts and are small on purpose:
- *   PASSPORT_CAP_ENTRY=1024   PASSPORT_CAP_MEMORY=1024  PASSPORT_CAP_CONFIG=512
- *   PASSPORT_CAP_SESSIONS=4096  PASSPORT_CAP_GRANTS=256  PASSPORT_CAP_IDENTITY=512
- *   PASSPORT_CAP_TOTAL=3000 (below the section-cap sum, so it can bind)
+ *   SIGNET_CAP_ENTRY=1024   SIGNET_CAP_MEMORY=1024  SIGNET_CAP_CONFIG=512
+ *   SIGNET_CAP_SESSIONS=4096  SIGNET_CAP_GRANTS=256  SIGNET_CAP_IDENTITY=512
+ *   SIGNET_CAP_TOTAL=3000 (below the section-cap sum, so it can bind)
  *
  * The two tiers matter: an oversized ENTRY is reported in `skipped` while the
  * rest of the write commits; a section or namespace-total breach fails the
- * WHOLE write before any byte lands — asserted here by re-reading the
+ * WHOLE write before any byte lands - asserted here by re-reading the
  * namespace afterwards.
  */
 
@@ -38,7 +38,7 @@ describe('per-entry cap -> skipped, never silently dropped', () => {
   test('an oversized entry is skipped while valid entries commit', async () => {
     const token = await mustToken(id)
     const { status, body } = await put(token, id.namespace, {
-      'memory/big.md': blob(1500), // over PASSPORT_CAP_ENTRY=1024
+      'memory/big.md': blob(1500), // over SIGNET_CAP_ENTRY=1024
       'memory/ok.md': blob(10),
     })
     expect(status).toBe(200)
@@ -55,7 +55,7 @@ describe('per-section caps -> all-or-nothing 413', () => {
     const token = await mustToken(id)
     const { status, body } = await put(token, id.namespace, {
       'memory/a.md': blob(700),
-      'memory/b.md': blob(700), // 1400 total > PASSPORT_CAP_MEMORY=1024
+      'memory/b.md': blob(700), // 1400 total > SIGNET_CAP_MEMORY=1024
     })
     expect(status).toBe(413)
     expect(body.error?.code).toBe('section_cap_exceeded')
@@ -77,7 +77,7 @@ describe('per-section caps -> all-or-nothing 413', () => {
     const gid = identity('quota-section-grants')
     const token = await mustToken(gid)
     const { status, body } = await put(token, gid.namespace, {
-      'grants/g1.json': blob(300), // over PASSPORT_CAP_GRANTS=256
+      'grants/g1.json': blob(300), // over SIGNET_CAP_GRANTS=256
     })
     expect(status).toBe(413)
     expect(body.error?.code).toBe('section_cap_exceeded')
@@ -89,7 +89,7 @@ describe('namespace total cap -> all-or-nothing 413', () => {
 
   test('a write that would cross the total cap commits nothing', async () => {
     const token = await mustToken(id)
-    // 900 + 900 + 900 = 2700 bytes, under PASSPORT_CAP_TOTAL=3000 and under
+    // 900 + 900 + 900 = 2700 bytes, under SIGNET_CAP_TOTAL=3000 and under
     // every per-section cap.
     const first = await put(token, id.namespace, {
       'memory/a.md': blob(900),

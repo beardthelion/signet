@@ -1,8 +1,8 @@
 /**
- * Identity tests (PS-001, PS-010/011, PS-050/051).
+ * Identity tests (SN-001, SN-010/011, SN-050/051).
  *
  * Covers did:key generation and decoding, canonical-JSON sign/verify, the
- * namespace encoding, and rotation attestations — plus byte-exact
+ * namespace encoding, and rotation attestations - plus byte-exact
  * reproduction of spec/vectors/identity.json and rotation.json, which pin
  * the wire formats every conformant implementation shares.
  */
@@ -53,7 +53,7 @@ const rotationVector = JSON.parse(
   successorDid: string
 }
 
-describe('did:key generation (PS-001)', () => {
+describe('did:key generation (SN-001)', () => {
   test('generateIdentity produces a well-formed did:key', () => {
     const id = generateIdentity()
     expect(id.did).toMatch(/^did:key:z[1-9A-HJ-NP-Za-km-z]{40,}$/)
@@ -106,13 +106,13 @@ describe('sign/verify over canonical JSON', () => {
   })
 })
 
-describe('namespace encoding (PS-011)', () => {
+describe('namespace encoding (SN-011)', () => {
   test('encodeDid is did with : -> _', () => {
     expect(encodeDid('did:key:z6Mkabc')).toBe('did_key_z6Mkabc')
   })
 
-  test('namespaceFor produces passport:<encoded did>', () => {
-    expect(namespaceFor('did:key:z6Mkabc')).toBe('passport:did_key_z6Mkabc')
+  test('namespaceFor produces signet:<encoded did>', () => {
+    expect(namespaceFor('did:key:z6Mkabc')).toBe('signet:did_key_z6Mkabc')
   })
 })
 
@@ -141,7 +141,7 @@ describe('spec vectors (identity.json, rotation.json)', () => {
     expect(namespaceFor(identityVector.genesisDid)).toBe(identityVector.namespace)
   })
 
-  test('buildRotationAttestation reproduces the rotation vector (PS-051)', () => {
+  test('buildRotationAttestation reproduces the rotation vector (SN-051)', () => {
     const genesis = identityFromSeed(Buffer.from(identityVector.genesisSeedHex, 'hex'))
     const attestation = buildRotationAttestation({
       genesisDid: rotationVector.genesisDid,

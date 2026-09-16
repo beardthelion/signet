@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 
 /**
- * passport-check — the AI Passport conformance checker CLI (SPEC §8).
+ * signet-check - the Signet conformance checker CLI (SPEC §8).
  *
  * Usage:
- *   passport-check --target local            check the reference server in-process
- *   passport-check --target http://host:port check a live store over the wire
+ *   signet-check --target local            check the reference server in-process
+ *   signet-check --target http://host:port check a live store over the wire
  *
  * Prints the conformance report (spec/report-schema.json) to stdout and
  * exits 1 when any clause fails, 0 otherwise. `local` is the deepest check:
@@ -23,8 +23,8 @@ import { serializeReport, validateReport } from '../src/check/report.ts'
 function usage(): never {
   console.log(
     'usage:\n' +
-      '  passport-check --target local              check the reference server in-process\n' +
-      '  passport-check --target http://host:port   check a live store over the wire',
+      '  signet-check --target local              check the reference server in-process\n' +
+      '  signet-check --target http://host:port   check a live store over the wire',
   )
   process.exit(2)
 }
@@ -56,7 +56,7 @@ const report = await runCheck(target)
 // bug, not a conformance verdict, so it exits 2 rather than printing it.
 const problems = validateReport(report)
 if (problems.length) {
-  console.error(`passport-check produced an invalid report:\n${problems.join('\n')}`)
+  console.error(`signet-check produced an invalid report:\n${problems.join('\n')}`)
   process.exit(2)
 }
 

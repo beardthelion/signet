@@ -1,5 +1,5 @@
 /**
- * HTTP request handler for the passport wire protocol (SPEC §7). Extracted
+ * HTTP request handler for the signet wire protocol (SPEC §7). Extracted
  * from index.ts so it can be unit-tested via handleRequest(new Request(...))
  * without binding a socket.
  *
@@ -7,18 +7,18 @@
  *   GET  /health
  *   POST /auth/challenge               → {nonce, expiresAt} (single-use, 120 s)
  *   POST /auth/verify                  → {token, expiresAt} bearer bound to a DID
- *   GET  /passport/<ns>                → manifest view (entry metadata)
- *   GET  /passport/<ns>?view=hashes    → {entryKey: sha256-hash} for delta sync
- *   GET  /passport/<ns>?view=integrity → the identity/manifest.json blob
- *   GET  /passport/<ns>/<entryKey>     → one ciphertext blob
- *   PUT  /passport/<ns>                → delta upsert {base, entries, deletions?}
+ *   GET  /signet/<ns>                → manifest view (entry metadata)
+ *   GET  /signet/<ns>?view=hashes    → {entryKey: sha256-hash} for delta sync
+ *   GET  /signet/<ns>?view=integrity → the identity/manifest.json blob
+ *   GET  /signet/<ns>/<entryKey>     → one ciphertext blob
+ *   PUT  /signet/<ns>                → delta upsert {base, entries, deletions?}
  *
- * Every /passport/ request needs a bearer bound to a DID authorized for the
+ * Every /signet/ request needs a bearer bound to a DID authorized for the
  * namespace: the genesis DID, or the terminal DID of a valid rotation chain
- * (PS-090, PS-052). Unauthenticated → 401; wrong DID → 403.
+ * (SN-090, SN-052). Unauthenticated → 401; wrong DID → 403.
  *
  * The namespace is always a single path segment (its charset has no '/'), so
- * everything after `/passport/<ns>/` is the entry key.
+ * everything after `/signet/<ns>/` is the entry key.
  */
 
 import { DidKey, RotationAttestation } from '../types/index.ts'
@@ -34,6 +34,8 @@ import {
 } from './auth.ts'
 import { logJsonLine } from './log.ts'
 import { InvalidNameError, validateEntryKey, validateNamespace } from './namespace.ts'
+import { caps, QuotaError } from './quota.ts'
+import { take } from './ratelimit.ts'
 import {
   type EntryRead,
   getEntry,
@@ -44,9 +46,7 @@ import {
   StaleBaseError,
   UnreadableManifestError,
   upsert,
-} from './passport.ts'
-import { caps, QuotaError } from './quota.ts'
-import { take } from './ratelimit.ts'
+} from './signet.ts'
 
 // Applied to every response. The API serves only JSON and is consumed by
 // programmatic clients, so we lock down sniffing/caching/referrer leakage.
@@ -67,7 +67,7 @@ function json(body: unknown, status = 200, extraHeaders?: Record<string, string>
  * Internal marker carrying a refusal's error code on the Response itself, so
  * the rejection logger never has to clone and re-parse the body.
  */
-const ERROR_CODE: unique symbol = Symbol('passport.errorCode')
+const ERROR_CODE: unique symbol = Symbol('signet.errorCode')
 
 function apiError(
   code: string,
@@ -85,23 +85,23 @@ function apiError(
   return res
 }
 
-const PASSPORT_PREFIX = '/passport/'
+const SIGNET_PREFIX = '/signet/'
 
 /** Path decode outcome: off-route, malformed escape, or the parsed parts. */
-type PassportPath = { namespace: string; entryKey: string | null } | 'malformed' | null
+type SignetPath = { namespace: string; entryKey: string | null } | 'malformed' | null
 
 /**
- * Split `/passport/<ns>/<entryKey...>` into its parts. The namespace is a
+ * Split `/signet/<ns>/<entryKey...>` into its parts. The namespace is a
  * single segment (no '/' survives its grammar); the rest is the entry key,
  * which may itself contain '/'. Returns null off-route and 'malformed' when
- * the percent-encoding itself is broken — that is a 400, not a 404: the
+ * the percent-encoding itself is broken - that is a 400, not a 404: the
  * route matched but the path is not decodable.
  */
-function parsePassportPath(pathname: string): PassportPath {
-  if (!pathname.startsWith(PASSPORT_PREFIX)) return null
+function parseSignetPath(pathname: string): SignetPath {
+  if (!pathname.startsWith(SIGNET_PREFIX)) return null
   let rest: string
   try {
-    rest = decodeURIComponent(pathname.slice(PASSPORT_PREFIX.length))
+    rest = decodeURIComponent(pathname.slice(SIGNET_PREFIX.length))
   } catch {
     return 'malformed'
   }
@@ -157,7 +157,7 @@ export async function handleRequest(req: Request): Promise<Response> {
   try {
     res = await respond(req, ctx)
   } catch (err) {
-    console.error(`[passport] handler error (${(err as Error)?.constructor?.name ?? 'unknown'})`)
+    console.error(`[signet] handler error (${(err as Error)?.constructor?.name ?? 'unknown'})`)
     res = apiError('internal', 'internal error', 500)
   }
   if (res.status >= 400) {
@@ -179,7 +179,7 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
   const { pathname } = url
 
   if (pathname === '/health') {
-    return json({ ok: true, service: 'passport-store' })
+    return json({ ok: true, service: 'signet-store' })
   }
 
   // Resolve the bearer before refusing anything so the throttle below keys
@@ -210,13 +210,13 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
     return verify(req)
   }
 
-  // ── Passport data endpoints ──────────────────────────────────────────
-  const parsed = parsePassportPath(pathname)
+  // ── Signet data endpoints ──────────────────────────────────────────
+  const parsed = parseSignetPath(pathname)
   if (parsed === 'malformed') {
     return apiError('bad_request', 'malformed percent-encoding in path', 400)
   }
   if (!parsed) return apiError('not_found', 'unknown route', 404)
-  ctx.route = 'passport'
+  ctx.route = 'signet'
 
   if (!did) return apiError('unauthorized', 'missing or invalid bearer token', 401)
 
@@ -235,7 +235,7 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
     if (req.method === 'GET') {
       if (parsed.entryKey !== null) {
         // The key is attacker-controlled; it is validated before it can
-        // reach a storage path (PS-021).
+        // reach a storage path (SN-021).
         try {
           validateEntryKey(parsed.entryKey)
         } catch (err) {
@@ -246,7 +246,7 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
       const view = url.searchParams.get('view')
       if (view === 'hashes') {
         const hashes = await getHashes(namespace)
-        if (hashes === null) return apiError('empty', 'no passport for this namespace yet', 404)
+        if (hashes === null) return apiError('empty', 'no signet for this namespace yet', 404)
         return json(hashes)
       }
       if (view === 'integrity') {
@@ -254,7 +254,7 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
       }
       if (view !== null) return apiError('bad_request', `unknown view "${view}"`, 400)
       const manifest = await getManifest(namespace)
-      if (manifest === null) return apiError('empty', 'no passport for this namespace yet', 404)
+      if (manifest === null) return apiError('empty', 'no signet for this namespace yet', 404)
       return json(manifest)
     }
 
@@ -295,7 +295,7 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
     if (manifest) return manifest
     // The error's class only. A store error commonly carries an endpoint, a
     // bucket and an object path, and that path carries a namespace slug.
-    console.error(`[passport] handler error (${(err as Error)?.constructor?.name ?? 'unknown'})`)
+    console.error(`[signet] handler error (${(err as Error)?.constructor?.name ?? 'unknown'})`)
     return apiError('internal', 'internal error', 500)
   }
 }
@@ -303,7 +303,7 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
 /** Map a single-entry read's four outcomes to four distinct responses. */
 function entryResponse(found: EntryRead): Response {
   if (found.status === 'no_namespace') {
-    return apiError('empty', 'no passport for this namespace yet', 404)
+    return apiError('empty', 'no signet for this namespace yet', 404)
   }
   if (found.status === 'no_entry') {
     return apiError('entry_not_found', 'no such entry in this namespace', 404)
@@ -317,13 +317,13 @@ function entryResponse(found: EntryRead): Response {
 }
 
 /**
- * POST /auth/verify — {did, nonce, sig, attestations?}.
+ * POST /auth/verify - {did, nonce, sig, attestations?}.
  *
  * The nonce is consumed before the signature check: single-use means a
  * failed verify must not leave it live for a retry race. `sig` is the
  * base64 Ed25519 signature over the nonce's UTF-8 bytes by `did`'s key.
  * `attestations`, when present, must form a valid rotation chain rooted at
- * their declared genesisDid and terminating at `did` (PS-051/052); a valid
+ * their declared genesisDid and terminating at `did` (SN-051/052); a valid
  * chain is persisted under that genesis namespace so later requests from
  * `did` are authorized against it.
  */
@@ -351,7 +351,7 @@ async function verify(req: Request): Promise<Response> {
   }
   // The preimage is domain-separated: the same key signs attestations and
   // manifests, so the nonce is never signed bare (SPEC §7.1).
-  if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${obj.nonce}`), obj.sig)) {
+  if (!verifyDidSignature(did, new TextEncoder().encode(`signet-auth:${obj.nonce}`), obj.sig)) {
     return apiError('invalid_signature', 'signature does not verify against the DID key', 401)
   }
 

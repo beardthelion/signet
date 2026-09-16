@@ -1,36 +1,36 @@
 /**
- * Passport tools, decoupled from the MCP transport so they can be unit tested
- * directly against a PassportClient. server.ts wraps each result into the MCP
+ * Signet tools, decoupled from the MCP transport so they can be unit tested
+ * directly against a SignetClient. server.ts wraps each result into the MCP
  * content shape; everything substantive lives here.
  *
  * Trust boundary: all encryption/decryption happens inside the client in THIS
  * process, which holds the passphrase and the holder signing key. The remote
- * store only ever sees ciphertext (PS-034), so recall/search/config_get and
+ * store only ever sees ciphertext (SN-034), so recall/search/config_get and
  * grant_list all run locally over pulled plaintext.
  *
  * Three spec rules are enforced HERE, at the tool layer, because the MCP
  * surface is where a consuming model could route around them:
- *   - PS-062: passport_grant_record is the only write path for grants. `save`
+ *   - SN-062: signet_grant_record is the only write path for grants. `save`
  *     and `delete` refuse `grants/` keys outright, and `grantRecord` refuses
  *     any grant the holder has not explicitly confirmed. There is no tool that
- *     applies a grant to the harness — grants port as records (PS-061).
- *   - PS-070: permission-affecting keys must not land under `config/` through
+ *     applies a grant to the harness - grants port as records (SN-061).
+ *   - SN-070: permission-affecting keys must not land under `config/` through
  *     any tool, so `save` applies the same isDeniedConfigKey check as
  *     `configSet`.
  *   - `identity/` entries are written by the client itself (did.json at init,
  *     rotations, the signed manifest); the tools refuse to write or delete
- *     under it rather than let a tool call clobber the passport's root of
+ *     under it rather than let a tool call clobber the signet's root of
  *     trust.
  */
 
 import type { PullResult, PushResult } from '../client/client.ts'
 import {
   MANIFEST_ENTRY_KEY,
-  PassportDecryptError,
-  PassportHttpError,
-  PassportIntegrityError,
-  PassportSkippedError,
-  PassportTimeoutError,
+  SignetDecryptError,
+  SignetHttpError,
+  SignetIntegrityError,
+  SignetSkippedError,
+  SignetTimeoutError,
 } from '../client/client.ts'
 import { SecretFoundError } from '../client/secretscan.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
@@ -39,11 +39,11 @@ import { rankEntries } from './relevance.ts'
 export type ToolResult = { text: string; isError?: boolean }
 
 /**
- * The slice of PassportClient these tools actually use. Structural rather than
+ * The slice of SignetClient these tools actually use. Structural rather than
  * the concrete class so a test can drive a specific server refusal through the
  * tools without a live server; the real client still has to satisfy it.
  */
-export type PassportToolClient = {
+export type SignetToolClient = {
   push(entries: Record<string, string>, opts?: { deletions?: string[] }): Promise<PushResult>
   pull(): Promise<PullResult>
   hashes(): Promise<Record<string, string>>
@@ -61,7 +61,7 @@ export type ToolOptions = {
   holderDid?: string
   /**
    * Called after every successful write so the host can persist the manifest
-   * seq the client just published (PS-041 anti-rollback state lives in
+   * seq the client just published (SN-041 anti-rollback state lives in
    * custody, outside this process's memory).
    */
   onSync?: () => void | Promise<void>
@@ -89,8 +89,8 @@ function snippet(content: string, max = 200): string {
   return oneLine.length > max ? `${oneLine.slice(0, max)}...` : oneLine
 }
 
-// Output bounds: a passport is holder data, but its size is unbounded from
-// the model's perspective — an entry can be megabytes and a namespace can
+// Output bounds: a signet is holder data, but its size is unbounded from
+// the model's perspective - an entry can be megabytes and a namespace can
 // hold thousands of keys. Tool results are capped so one call cannot flood
 // the context; truncation is always marked, never silent.
 const RECALL_ENTRY_MAX = 4_000
@@ -105,35 +105,35 @@ const LIST_KEY_MAX = 200
  */
 function renderError(action: string, e: unknown, tail: string): string {
   if (e instanceof SecretFoundError) {
-    return `${action} refused: the pre-encryption scan found what looks like a live credential, and secrets never enter a passport (PS-110). ${bounded(e.message, 500)} ${tail}`
+    return `${action} refused: the pre-encryption scan found what looks like a live credential, and secrets never enter a signet (SN-110). ${bounded(e.message, 500)} ${tail}`
   }
-  if (e instanceof PassportIntegrityError) {
-    return `${action} failed: the passport's signed integrity manifest did not verify, so nothing read or written here can be trusted (PS-041). ${bounded(e.message)} Do not retry the same call; tell the user the passport failed an integrity check. ${tail}`
+  if (e instanceof SignetIntegrityError) {
+    return `${action} failed: the signet's signed integrity manifest did not verify, so nothing read or written here can be trusted (SN-041). ${bounded(e.message)} Do not retry the same call; tell the user the signet failed an integrity check. ${tail}`
   }
-  if (e instanceof PassportDecryptError) {
-    return `${action} failed: a stored entry did not decrypt with this passphrase (${bounded(e.entryKey, 120)}). The passphrase this process holds is probably not the one the passport was created with; tell the user rather than writing over the passport. ${tail}`
+  if (e instanceof SignetDecryptError) {
+    return `${action} failed: a stored entry did not decrypt with this passphrase (${bounded(e.entryKey, 120)}). The passphrase this process holds is probably not the one the signet was created with; tell the user rather than writing over the signet. ${tail}`
   }
-  if (e instanceof PassportSkippedError) {
+  if (e instanceof SignetSkippedError) {
     const reasons = e.skipped
       .map(s => `${bounded(s.key, 120)} (${bounded(s.reason, 60)})`)
       .join(', ')
-    return `${action} refused by the store: ${reasons}. Shorten or split the content and try again; oversized entries are skipped, never silently dropped (PS-081). ${tail}`
+    return `${action} refused by the store: ${reasons}. Shorten or split the content and try again; oversized entries are skipped, never silently dropped (SN-081). ${tail}`
   }
-  if (e instanceof PassportTimeoutError) {
+  if (e instanceof SignetTimeoutError) {
     return `${action} failed: the store accepted the connection but did not answer within ${e.timeoutMs}ms. Retry once; if it keeps happening, tell the user the store is slow or stuck. ${tail}`
   }
-  if (e instanceof PassportHttpError) {
+  if (e instanceof SignetHttpError) {
     if (e.status === 401) {
-      return `${action} refused: the store rejected this passport's identity (401 unauthorized). Retrying cannot succeed; tell the user the custody signing key is not being accepted. ${tail}`
+      return `${action} refused: the store rejected this signet's identity (401 unauthorized). Retrying cannot succeed; tell the user the custody signing key is not being accepted. ${tail}`
     }
     if (e.status === 403) {
-      return `${action} refused: this signing key is not authorized for the passport's namespace (403 forbidden). The namespace is bound to the genesis DID forever (PS-010); tell the user the custody does not match this passport. ${tail}`
+      return `${action} refused: this signing key is not authorized for the signet's namespace (403 forbidden). The namespace is bound to the genesis DID forever (SN-010); tell the user the custody does not match this signet. ${tail}`
     }
     if (e.status === 409) {
-      return `${action} refused: the passport changed on the store after this session last read it, so the base this write was computed from is stale (409). Re-read with passport_recall, reapply the change on top of what is stored now, and try again. ${tail}`
+      return `${action} refused: the signet changed on the store after this session last read it, so the base this write was computed from is stale (409). Re-read with signet_recall, reapply the change on top of what is stored now, and try again. ${tail}`
     }
     if (e.status === 429) {
-      return `${action} refused: the store is rate limiting (429). Do not retry in a loop; tell the user passport writes are paused. ${tail}`
+      return `${action} refused: the store is rate limiting (429). Do not retry in a loop; tell the user signet writes are paused. ${tail}`
     }
     return `${action} failed: the store answered ${e.status} (${bounded(e.code, 60)}). ${tail}`
   }
@@ -142,19 +142,19 @@ function renderError(action: string, e: unknown, tail: string): string {
 
 /**
  * Entry keys a tool must not write through `save`/`delete`. Grants go through
- * grant_record only (PS-062); identity material is client-managed. Returns the
+ * grant_record only (SN-062); identity material is client-managed. Returns the
  * refusal text, or null when the key is writable through the general tools.
  */
 function writeRefusal(key: string): string | null {
   const section = key.split('/')[0]
   if (section === 'grants') {
-    return `"${key}" is under grants/: the only write path for grants is passport_grant_record, and it records only holder-confirmed grants (PS-062).`
+    return `"${key}" is under grants/: the only write path for grants is signet_grant_record, and it records only holder-confirmed grants (SN-062).`
   }
   if (section === 'identity') {
     return `"${key}" is under identity/: identity material (did.json, rotations, the signed manifest) is written by the client itself, never through a tool.`
   }
   if (section === 'config' && isDeniedConfigKey(key)) {
-    return `"${key}" looks permission-affecting: keys matching the PS-070 denylist are never stored under config/. Record holder-confirmed permission state with passport_grant_record instead.`
+    return `"${key}" looks permission-affecting: keys matching the SN-070 denylist are never stored under config/. Record holder-confirmed permission state with signet_grant_record instead.`
   }
   return null
 }
@@ -162,7 +162,7 @@ function writeRefusal(key: string): string | null {
 /** Validate a caller-supplied entry key before anything touches storage. */
 function keyError(key: string): string | null {
   if (!EntryKey.safeParse(key).success) {
-    return `"${bounded(key, 120)}" is not a valid entry key: use <section>/<path> where section is memory, config, sessions, grants, or identity, with no "..", no "//", no leading or trailing "/", and no backslash (PS-020/021).`
+    return `"${bounded(key, 120)}" is not a valid entry key: use <section>/<path> where section is memory, config, sessions, grants, or identity, with no "..", no "//", no leading or trailing "/", and no backslash (SN-020/021).`
   }
   return null
 }
@@ -178,16 +178,16 @@ function grantEntryKey(id: string): string | null {
   return EntryKey.safeParse(key).success ? key : null
 }
 
-export type PassportTools = ReturnType<typeof makeTools>
+export type SignetTools = ReturnType<typeof makeTools>
 
-export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
+export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
   const sync = () => opts.onSync?.()
 
   /** Pull and drop the client-managed manifest entry from the result set. */
   const pullUserEntries = async (): Promise<Record<string, string>> => {
     const { entries } = await client.pull()
     // A successful pull adopts the verified manifest's seq in memory; hand
-    // it to the host so the PS-041 floor survives this process.
+    // it to the host so the SN-041 floor survives this process.
     await sync()
     const out: Record<string, string> = {}
     for (const [k, v] of Object.entries(entries)) if (k !== MANIFEST_ENTRY_KEY) out[k] = v
@@ -197,7 +197,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
   /**
    * One section's plaintext entries. Uses the client's section-scoped pull
    * when it has one so grant_list/config_get don't download the whole
-   * passport; otherwise a full pull filtered locally — identical results.
+   * signet; otherwise a full pull filtered locally - identical results.
    */
   const pullSectionEntries = async (section: Section): Promise<Record<string, string>> => {
     if (client.pullSection) {
@@ -211,7 +211,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
   }
 
   return {
-    /** Persist one entry (encrypted before upload, scanned first per PS-110). */
+    /** Persist one entry (encrypted before upload, scanned first per SN-110). */
     async save(key: string, content: string): Promise<ToolResult> {
       const bad = keyError(key)
       if (bad) return fail(bad)
@@ -235,10 +235,10 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
     async recall(query: string, limit = 5): Promise<ToolResult> {
       try {
         const entries = await pullUserEntries()
-        if (Object.keys(entries).length === 0) return ok('(the passport is empty)')
+        if (Object.keys(entries).length === 0) return ok('(the signet is empty)')
         const ranked = rankEntries(query, entries, limit)
         if (ranked.length === 0) {
-          return ok(`(nothing in the passport looks relevant to "${bounded(query, 120)}")`)
+          return ok(`(nothing in the signet looks relevant to "${bounded(query, 120)}")`)
         }
         // Entries can be arbitrarily large; each is capped and the whole
         // answer carries a total budget so recall cannot flood the context.
@@ -306,7 +306,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
         if (section) keys = keys.filter(k => k.split('/')[0] === section)
         if (keys.length === 0) {
           return ok(
-            section ? `(no entries under ${bounded(section, 40)}/)` : '(the passport is empty)',
+            section ? `(no entries under ${bounded(section, 40)}/)` : '(the signet is empty)',
           )
         }
         const shown = keys.slice(0, LIST_KEY_MAX)
@@ -330,19 +330,19 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
       const section = key.split('/')[0]
       if (section === 'identity') {
         return fail(
-          `Refused to delete "${key}": identity material is client-managed and deleting it would corrupt the passport's root of trust.`,
+          `Refused to delete "${key}": identity material is client-managed and deleting it would corrupt the signet's root of trust.`,
         )
       }
       if (section === 'grants') {
         return fail(
-          `Refused to delete "${key}": grants are written only through passport_grant_record, and that tool never deletes (PS-062). A grant record cannot be removed through this tool.`,
+          `Refused to delete "${key}": grants are written only through signet_grant_record, and that tool never deletes (SN-062). A grant record cannot be removed through this tool.`,
         )
       }
       try {
         const r = await client.push({}, { deletions: [key] })
         await sync()
         if (!r.deleted.includes(key)) {
-          return ok(`nothing named "${key}" is stored; the passport is unchanged`)
+          return ok(`nothing named "${key}" is stored; the signet is unchanged`)
         }
         return ok(`deleted "${key}" (manifest seq ${r.seq})`)
       } catch (e) {
@@ -376,13 +376,13 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
     },
 
     /**
-     * Write one `config/<key>` entry. PS-070: permission-affecting keys are
-     * refused — that state belongs in grants/, recorded holder-confirmed.
+     * Write one `config/<key>` entry. SN-070: permission-affecting keys are
+     * refused - that state belongs in grants/, recorded holder-confirmed.
      */
     async configSet(key: string, value: string): Promise<ToolResult> {
       if (isDeniedConfigKey(key)) {
         return fail(
-          `Refused to set config "${bounded(key, 120)}": the key matches the PS-070 denylist (permission/grant/allow/deny/trust/sandbox/exec/approve/policy). Permission state is never stored under config/; record a holder-confirmed grant with passport_grant_record instead.`,
+          `Refused to set config "${bounded(key, 120)}": the key matches the SN-070 denylist (permission/grant/allow/deny/trust/sandbox/exec/approve/policy). Permission state is never stored under config/; record a holder-confirmed grant with signet_grant_record instead.`,
         )
       }
       const entryKey = `config/${key}`
@@ -397,7 +397,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
       }
     },
 
-    /** Read-only enumeration of recorded grants (PS-060/061). */
+    /** Read-only enumeration of recorded grants (SN-060/061). */
     async grantList(): Promise<ToolResult> {
       try {
         const entries = await pullSectionEntries('grants')
@@ -416,7 +416,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
           return `- ${k}: ${g.action} on "${g.scope}" (by ${g.granted_by}, at ${g.granted_at}${g.expires_at ? `, expires ${g.expires_at}` : ''})`
         })
         return ok(
-          `${grants.length} recorded grant${grants.length === 1 ? '' : 's'} (records only — a consuming harness must re-confirm before honoring any of them, PS-061):\n${lines.join('\n')}`,
+          `${grants.length} recorded grant${grants.length === 1 ? '' : 's'} (records only - a consuming harness must re-confirm before honoring any of them, SN-061):\n${lines.join('\n')}`,
         )
       } catch (e) {
         return fail(renderError('Listing grants', e, 'Nothing was read.'))
@@ -424,10 +424,10 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
     },
 
     /**
-     * Record a holder-confirmed grant under grants/<id>.json (PS-062). The
-     * `confirmed` flag must be explicitly true — a grant the holder did not
+     * Record a holder-confirmed grant under grants/<id>.json (SN-062). The
+     * `confirmed` flag must be explicitly true - a grant the holder did not
      * confirm is never written. Recording is all this does: nothing here or
-     * anywhere applies the grant to the running harness (PS-061).
+     * anywhere applies the grant to the running harness (SN-061).
      */
     async grantRecord(input: {
       id: string
@@ -441,7 +441,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
     }): Promise<ToolResult> {
       if (input.confirmed !== true) {
         return fail(
-          'Refused to record: passport_grant_record writes only grants the holder explicitly confirmed. Ask the holder, then call again with confirmed: true (PS-062).',
+          'Refused to record: signet_grant_record writes only grants the holder explicitly confirmed. Ask the holder, then call again with confirmed: true (SN-062).',
         )
       }
       const entryKey = grantEntryKey(input.id)
@@ -463,14 +463,14 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
       if (!parsed.success) {
         const issues = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')
         return fail(
-          `Refused to record: the grant fails the PS-060 vocabulary — ${bounded(issues, 300)}`,
+          `Refused to record: the grant fails the SN-060 vocabulary - ${bounded(issues, 300)}`,
         )
       }
       try {
         const r = await client.push({ [entryKey]: `${JSON.stringify(parsed.data, null, 2)}\n` })
         await sync()
         return ok(
-          `recorded grant "${parsed.data.id}" at ${entryKey} (manifest seq ${r.seq}). This is a record only: no harness has applied it, and any consumer must re-confirm with the holder before honoring it (PS-061).`,
+          `recorded grant "${parsed.data.id}" at ${entryKey} (manifest seq ${r.seq}). This is a record only: no harness has applied it, and any consumer must re-confirm with the holder before honoring it (SN-061).`,
         )
       } catch (e) {
         return fail(

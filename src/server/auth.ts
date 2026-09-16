@@ -1,23 +1,23 @@
 /**
- * DID authentication and namespace authorization (PS-090, PS-050..053).
+ * DID authentication and namespace authorization (SN-090, SN-050..053).
  *
  * Challenge/response: POST /auth/challenge issues a random, single-use nonce
- * (120 s expiry, PS-090); POST /auth/verify checks an Ed25519 signature over
- * the domain-separated preimage "passport-auth:" + nonce (UTF-8 bytes)
+ * (120 s expiry, SN-090); POST /auth/verify checks an Ed25519 signature over
+ * the domain-separated preimage "signet-auth:" + nonce (UTF-8 bytes)
  * against the request's did:key and returns a short-lived bearer bound to
- * that DID. Every /passport/ request then needs a bearer whose DID is
+ * that DID. Every /signet/ request then needs a bearer whose DID is
  * authorized for the target namespace: the genesis DID encoded in the
  * namespace itself while no rotation chain is stored, or the terminal DID of
- * a valid rotation-attestation chain rooted at that genesis (PS-052).
+ * a valid rotation-attestation chain rooted at that genesis (SN-052).
  *
  * Rotation chains arrive on the /auth/verify request (the client presents its
  * chain) and, once verified, are persisted under the namespace so later
  * requests can be authorized without re-presenting them. The stored chain is
- * re-verified on every authorization — persistence is a cache, not a trust
+ * re-verified on every authorization - persistence is a cache, not a trust
  * decision, so a tampered store cannot mint authority.
  *
  * The signed message for /auth/verify is the UTF-8 bytes of
- * `"passport-auth:" + nonce` (SPEC §7.1). The same Ed25519 key signs
+ * `"signet-auth:" + nonce` (SPEC §7.1). The same Ed25519 key signs
  * attestations and manifests; the fixed prefix keeps a server-chosen nonce
  * from ever doubling as a signed document of another kind.
  */
@@ -38,7 +38,7 @@ const nonces = new Map<string, number>() // nonce -> expiresAt ms
 /**
  * Hard ceiling on the in-memory maps in this module. Idle eviction keeps the
  * steady-state small; the ceiling is the stop-loss for a flood of fresh keys
- * inside one TTL window — past it, new entries are refused rather than
+ * inside one TTL window - past it, new entries are refused rather than
  * growing the map without bound.
  */
 const MAP_HARD_LIMIT = 100_000
@@ -54,7 +54,7 @@ export function issueChallenge(now = Date.now()): { nonce: string; expiresAt: st
 /**
  * Consume a nonce. Single-use: it is deleted even when the signature check
  * that follows fails, so a replayed or raced nonce is always rejected
- * (PS-090). Returns false for unknown or expired nonces.
+ * (SN-090). Returns false for unknown or expired nonces.
  */
 export function consumeNonce(nonce: string, now = Date.now()): boolean {
   const expiresAt = nonces.get(nonce)
@@ -65,7 +65,7 @@ export function consumeNonce(nonce: string, now = Date.now()): boolean {
 
 // ─── Bearer tokens ──────────────────────────────────────────────────────
 
-const TOKEN_TTL_MS = envInt('PASSPORT_TOKEN_TTL_SEC', 600) * 1000
+const TOKEN_TTL_MS = envInt('SIGNET_TOKEN_TTL_SEC', 600) * 1000
 const tokens = new Map<string, { did: string; expiresAt: number }>()
 
 export function issueToken(
@@ -194,27 +194,27 @@ export function canonicalJson(value: unknown): string {
   return `{${entries.join(',')}}`
 }
 
-/** sha256 hex of an attestation's canonical JSON — the prevHash link (PS-051). */
+/** sha256 hex of an attestation's canonical JSON - the prevHash link (SN-051). */
 export function attestationHash(att: RotationAttestation): string {
   return sha256Hex(canonicalJson(att))
 }
 
-// ─── Rotation attestation chains (PS-051/PS-052) ────────────────────────
+// ─── Rotation attestation chains (SN-051/SN-052) ────────────────────────
 
 const GENESIS_PREV_HASH = '0'.repeat(64)
 
 /**
  * The most attestations a chain may carry. Every element costs a schema
  * parse plus an Ed25519 verify, so the bound is enforced before any of that
- * work happens — an oversized chain is refused on length alone.
+ * work happens - an oversized chain is refused on length alone.
  */
 export const MAX_ATTESTATION_CHAIN = 64
 
 /**
  * Verify a presented chain of rotation attestations rooted at `genesis`.
  *
- * Returns the DID the chain terminates at — the currently authorized
- * successor — or null if any link fails. Every attestation must name the same
+ * Returns the DID the chain terminates at - the currently authorized
+ * successor - or null if any link fails. Every attestation must name the same
  * genesis DID, carry seq = position (1-based, strictly increasing), link
  * prevHash to the previous attestation's canonical-JSON hash ("0"*64 at
  * seq=1), and be signed by its predecessor's key (the genesis key for seq=1).
@@ -289,7 +289,7 @@ function storedChainLength(raw: Uint8Array): number {
  * what is stored.
  *
  * Fail closed on a corrupt stored chain: when the stored blob fails
- * validation it is NOT treated as absent — a shorter presented chain that
+ * validation it is NOT treated as absent - a shorter presented chain that
  * overwrote it would re-authorize keys the real stored chain had rotated
  * out. Only a presented chain strictly longer than the stored element count
  * can replace it, and a blob that cannot even be measured is never replaced.
@@ -315,10 +315,10 @@ export async function persistAttestationChain(
 
 /**
  * Is `did` authorized for `ns`? While no rotation chain is stored, the
- * genesis DID encoded in the namespace (PS-010/PS-011). Once a chain is
- * stored, only its terminal DID authorizes (PS-052): rotation retires the
+ * genesis DID encoded in the namespace (SN-010/SN-011). Once a chain is
+ * stored, only its terminal DID authorizes (SN-052): rotation retires the
  * old key, so the genesis DID loses authority along with every mid-chain
- * key — otherwise a rotated-out genesis could never be revoked. A stored
+ * key - otherwise a rotated-out genesis could never be revoked. A stored
  * chain that fails re-verification authorizes nobody.
  */
 export async function isAuthorizedDid(did: string, ns: string): Promise<boolean> {

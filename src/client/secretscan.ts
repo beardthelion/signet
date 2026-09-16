@@ -1,33 +1,33 @@
 /**
- * Client-side secret scanner — defense in depth (PS-110).
+ * Client-side secret scanner - defense in depth (SN-110).
  *
- * A passport carries an agent's whole working state, and agents are
+ * A signet carries an agent's whole working state, and agents are
  * excellent at accidentally writing "the API key is sk-..." into a note.
  * Everything is encrypted before upload, but a synced secret is still a
- * synced secret: a leaked passphrase, or a pulled passport on a second
- * machine, would expose it. So every entry — session chunks included — is
+ * synced secret: a leaked passphrase, or a pulled signet on a second
+ * machine, would expose it. So every entry - session chunks included - is
  * scanned HERE, on the client, BEFORE encryption, and (by default) refused
  * if it looks like it carries a live credential.
  *
- * This is a pragmatic regex pass in the spirit of gitleaks — high-signal
+ * This is a pragmatic regex pass in the spirit of gitleaks - high-signal
  * patterns, tuned so plausible non-secret lookalikes pass. It is not a
  * guarantee; it is a seatbelt. Mode is controlled by the caller
- * (PASSPORT_SCAN): block (default), warn, or off.
+ * (SIGNET_SCAN): block (default), warn, or off.
  */
 
 export const SCAN_MODES = ['block', 'warn', 'off'] as const
 export type ScanMode = (typeof SCAN_MODES)[number]
 
 /**
- * The PASSPORT_SCAN value as a ScanMode. Invalid values throw rather than
+ * The SIGNET_SCAN value as a ScanMode. Invalid values throw rather than
  * silently degrading to a weaker policy: a typo'd `block` must never
  * behave like `warn`.
  */
-export function scanModeFromEnv(raw: string | undefined = process.env.PASSPORT_SCAN): ScanMode {
+export function scanModeFromEnv(raw: string | undefined = process.env.SIGNET_SCAN): ScanMode {
   const mode = raw ?? 'block'
   if (!(SCAN_MODES as readonly string[]).includes(mode)) {
     throw new Error(
-      `invalid PASSPORT_SCAN ${JSON.stringify(mode)}: expected one of ${SCAN_MODES.join(', ')}`,
+      `invalid SIGNET_SCAN ${JSON.stringify(mode)}: expected one of ${SCAN_MODES.join(', ')}`,
     )
   }
   return mode as ScanMode
@@ -156,7 +156,7 @@ export class SecretFoundError extends Error {
     super(
       `refusing to upload: ${findings.length} potential secret(s) detected.\n` +
         findings.map(f => `  ${f.entryKey}:${f.line} - ${f.description} (${f.match})`).join('\n') +
-        `\nReview and remove them, or set PASSPORT_SCAN=warn to override (NOT recommended).`,
+        `\nReview and remove them, or set SIGNET_SCAN=warn to override (NOT recommended).`,
     )
     this.name = 'SecretFoundError'
     this.findings = findings

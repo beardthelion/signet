@@ -1,5 +1,5 @@
 /**
- * Conformance report model — the deterministic JSON artifact passport-check
+ * Conformance report model - the deterministic JSON artifact signet-check
  * emits (SPEC §8, spec/report-schema.json).
  *
  * Two hard requirements shape this module:
@@ -12,7 +12,7 @@
  *     sanitizer that strips DIDs, digests, and local paths (see index.ts).
  *
  * `validateReport` is a hand-rolled structural check of the same shape
- * spec/report-schema.json describes — no JSON-schema dependency. It also
+ * spec/report-schema.json describes - no JSON-schema dependency. It also
  * checks the two contract properties the schema cannot express: sorted,
  * unique clause ids and a summary that matches the results.
  */
@@ -28,20 +28,20 @@ export type ReportResult = { clause: string; status: ClauseStatus; detail?: stri
 export type ConformanceReport = {
   specVersion: string
   target: string
-  generatedBy: 'passport-check'
+  generatedBy: 'signet-check'
   results: ReportResult[]
   summary: { pass: number; fail: number; unsupported: number }
 }
 
-export const GENERATED_BY = 'passport-check' as const
+export const GENERATED_BY = 'signet-check' as const
 
-const SPEC_VERSION_RE = /^passport-spec\/[0-9]+\.[0-9]+$/
-const CLAUSE_RE = /^PS-[0-9]{3}$/
+const SPEC_VERSION_RE = /^signet-spec\/[0-9]+\.[0-9]+$/
+const CLAUSE_RE = /^SN-[0-9]{3}$/
 const STATUSES: readonly string[] = ['pass', 'fail', 'unsupported']
 
 /**
  * Sort results by clause id and compute the summary. Detail strings are
- * included verbatim — callers sanitize before this point.
+ * included verbatim - callers sanitize before this point.
  */
 export function buildReport(
   specVersion: string,
@@ -90,7 +90,7 @@ export function validateReport(report: unknown): string[] {
     if (!(k in report)) problems.push(`missing required key "${k}"`)
   }
   if (typeof report.specVersion !== 'string' || !SPEC_VERSION_RE.test(report.specVersion)) {
-    problems.push('specVersion must match ^passport-spec/[0-9]+\\.[0-9]+$')
+    problems.push('specVersion must match ^signet-spec/[0-9]+\\.[0-9]+$')
   }
   if (typeof report.target !== 'string') problems.push('target must be a string')
   if (typeof report.generatedBy !== 'string') problems.push('generatedBy must be a string')
@@ -107,7 +107,7 @@ export function validateReport(report: unknown): string[] {
         problems.push(`results[${i}] has unexpected key "${k}"`)
       }
       if (typeof item.clause !== 'string' || !CLAUSE_RE.test(item.clause)) {
-        problems.push(`results[${i}].clause must match ^PS-[0-9]{3}$`)
+        problems.push(`results[${i}].clause must match ^SN-[0-9]{3}$`)
         continue
       }
       if (seen.has(item.clause)) problems.push(`duplicate clause ${item.clause}`)

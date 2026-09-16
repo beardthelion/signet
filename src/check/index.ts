@@ -1,11 +1,11 @@
 /**
- * passport-check — the deterministic clause-level conformance checker
+ * signet-check - the deterministic clause-level conformance checker
  * (SPEC §8). Runs every check registered in spec/clauses.json against a
  * target and emits the sorted, spec-version-stamped report defined by
  * spec/report-schema.json.
  *
  * Trust boundary: a target is attacker-controlled infrastructure. Every
- * response it returns is untrusted input — checks assert on status codes and
+ * response it returns is untrusted input - checks assert on status codes and
  * structural shapes, and detail strings carried into the report are passed
  * through sanitizeDetail so a hostile target cannot plant DIDs, digests, or
  * local paths in a shareable artifact. The checker itself holds real secrets
@@ -24,7 +24,7 @@
 import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PassportClient } from '../client/client.ts'
+import { SignetClient } from '../client/client.ts'
 import {
   AUTH_PREIMAGE_PREFIX,
   generateIdentity,
@@ -44,8 +44,8 @@ export { trackTmpDir }
 
 // ─── Target model ───────────────────────────────────────────────────────
 
-/** Raw access to everything the store persists — needed by the leak-boundary
- *  and blob-inspection clauses (PS-034/035). Absent for socket targets. */
+/** Raw access to everything the store persists - needed by the leak-boundary
+ *  and blob-inspection clauses (SN-034/035). Absent for socket targets. */
 export type StoreAccess = {
   /** Every object path the store holds, posix-style (e.g. ns/<slug>/manifest.json). */
   paths(): Promise<string[]>
@@ -60,20 +60,20 @@ export type CheckTarget = {
   url: string
   /** The wire boundary: one Request in, one Response out. */
   fetch(req: Request): Promise<Response>
-  /** fetch-shaped adapter for PassportClient. */
+  /** fetch-shaped adapter for SignetClient. */
   clientFetch: typeof fetch
   /** Raw store access; undefined when the backend is opaque to the harness. */
   store?: StoreAccess
-  /** Byte caps the PS-081 probes are sized against; undefined if unknown. */
+  /** Byte caps the SN-081 probes are sized against; undefined if unknown. */
   caps?: { entry: number; memory: number }
   /** Process-startup probes only an in-process local harness can run. */
   bindProbe?(): Promise<ClauseResult>
   localModeProbe?(): Promise<ClauseResult>
 }
 
-/** A provisioned passport: a real client that has completed init + auth. */
+/** A provisioned signet: a real client that has completed init + auth. */
 export type Session = {
-  client: PassportClient
+  client: SignetClient
   identity: Identity
   namespace: string
   /** A bearer token for raw wire probes. */
@@ -92,7 +92,7 @@ export type CheckContext = {
   tokenFor(identity: Identity, attestations?: unknown[]): Promise<string>
   /** One wire request. `path` is appended verbatim after the base URL. */
   wire(method: string, path: string, opts?: { token?: string; body?: unknown }): Promise<Response>
-  /** Fresh identity + initialized passport + bearer token. */
+  /** Fresh identity + initialized signet + bearer token. */
   provision(): Promise<Session>
 }
 
@@ -105,7 +105,7 @@ type ClauseRegistry = {
   clauses: { id: string; title: string; check: string }[]
 }
 
-/** spec/clauses.json — the registry the implementation must stay in sync with. */
+/** spec/clauses.json - the registry the implementation must stay in sync with. */
 export function loadRegistry(): ClauseRegistry {
   const url = new URL('../../spec/clauses.json', import.meta.url)
   return JSON.parse(readFileSync(url, 'utf8')) as ClauseRegistry
@@ -164,7 +164,7 @@ function makeContext(target: CheckTarget, specVersion: string): CheckContext {
 
   const provision: CheckContext['provision'] = async () => {
     const identity = generateIdentity()
-    const client = new PassportClient({
+    const client = new SignetClient({
       url: target.url,
       fetchFn: target.clientFetch,
       identity,
@@ -202,7 +202,7 @@ export function sanitizeDetail(detail: string): string {
 
 /**
  * Run every clause in the registry against the target, in clause-id order.
- * A check that throws is a fail, not a crash — the report must always be
+ * A check that throws is a fail, not a crash - the report must always be
  * complete and sorted.
  */
 export async function runCheck(target: CheckTarget): Promise<ConformanceReport> {
@@ -321,7 +321,7 @@ async function spawnServer(env: Record<string, string>, waitMs: number): Promise
     env: {
       ...process.env,
       STORE: 'fs',
-      PASSPORT_DATA_DIR: trackTmpDir(mkdtempSync(join(tmpdir(), 'passport-check-serve-'))),
+      SIGNET_DATA_DIR: trackTmpDir(mkdtempSync(join(tmpdir(), 'signet-check-serve-'))),
       ...env,
     },
     stdout: 'pipe',
@@ -361,7 +361,7 @@ async function spawnServer(env: Record<string, string>, waitMs: number): Promise
 }
 
 /**
- * PS-091: a non-loopback bind without TLS must refuse to start; a loopback
+ * SN-091: a non-loopback bind without TLS must refuse to start; a loopback
  * bind must come up. Probed by actually starting the server entrypoint.
  */
 async function probeBindPolicy(): Promise<ClauseResult> {
@@ -369,7 +369,7 @@ async function probeBindPolicy(): Promise<ClauseResult> {
     return { status: 'unsupported', detail: 'bind probe needs the Bun runtime' }
   }
   const refused = await spawnServer(
-    { PASSPORT_MODE: 'hosted', PASSPORT_HOST: '0.0.0.0', PORT: '0' },
+    { SIGNET_MODE: 'hosted', SIGNET_HOST: '0.0.0.0', PORT: '0' },
     10_000,
   )
   refused.kill()
@@ -379,7 +379,7 @@ async function probeBindPolicy(): Promise<ClauseResult> {
   if (refused.code === 0 || !/tls/i.test(refused.stderr)) {
     return { status: 'fail', detail: 'non-loopback bind without TLS exited without a TLS refusal' }
   }
-  const loopback = await spawnServer({ PASSPORT_HOST: '127.0.0.1', PORT: '0' }, 10_000)
+  const loopback = await spawnServer({ SIGNET_HOST: '127.0.0.1', PORT: '0' }, 10_000)
   loopback.kill()
   if (!loopback.stdout.includes('listening') || loopback.code !== null) {
     return { status: 'fail', detail: 'loopback bind did not come up' }
@@ -387,18 +387,18 @@ async function probeBindPolicy(): Promise<ClauseResult> {
   return { status: 'pass' }
 }
 
-/** PS-092: local mode refuses a non-loopback bind even with TLS configured. */
+/** SN-092: local mode refuses a non-loopback bind even with TLS configured. */
 async function probeLocalMode(): Promise<ClauseResult> {
   if (typeof Bun === 'undefined') {
     return { status: 'unsupported', detail: 'local-mode probe needs the Bun runtime' }
   }
   const res = await spawnServer(
     {
-      PASSPORT_MODE: 'local',
-      PASSPORT_HOST: '0.0.0.0',
+      SIGNET_MODE: 'local',
+      SIGNET_HOST: '0.0.0.0',
       PORT: '0',
-      PASSPORT_TLS_CERT: '/nonexistent-cert.pem',
-      PASSPORT_TLS_KEY: '/nonexistent-key.pem',
+      SIGNET_TLS_CERT: '/nonexistent-cert.pem',
+      SIGNET_TLS_KEY: '/nonexistent-key.pem',
     },
     10_000,
   )
@@ -423,12 +423,12 @@ export async function localTarget(opts?: {
   dataDir?: string
 }): Promise<CheckTarget> {
   // Isolation is the default: without an explicit dataDir the checker gets a
-  // fresh mkdtemp store, and the ambient PASSPORT_DATA_DIR is never honored.
+  // fresh mkdtemp store, and the ambient SIGNET_DATA_DIR is never honored.
   // Callers that want a specific store pass it in.
-  const dataDir = opts?.dataDir ?? trackTmpDir(mkdtempSync(join(tmpdir(), 'passport-check-')))
+  const dataDir = opts?.dataDir ?? trackTmpDir(mkdtempSync(join(tmpdir(), 'signet-check-')))
   process.env.STORE ??= 'fs'
-  process.env.PASSPORT_DATA_DIR = dataDir
-  process.env.PASSPORT_MODE ??= 'local'
+  process.env.SIGNET_DATA_DIR = dataDir
+  process.env.SIGNET_MODE ??= 'local'
   const storeDir = dataDir
   const { handleRequest } = await import('../server/handler.ts')
   const { setStore } = await import('../server/store/blob.ts')
@@ -438,7 +438,7 @@ export async function localTarget(opts?: {
   setStore(store)
   return {
     name: opts?.name ?? 'local',
-    url: 'http://passport-check.local',
+    url: 'http://signet-check.local',
     fetch: req => handleRequest(req),
     clientFetch: ((input: RequestInfo | URL, init?: RequestInit) =>
       handleRequest(new Request(input, init))) as typeof fetch,

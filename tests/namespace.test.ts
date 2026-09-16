@@ -1,8 +1,8 @@
 /**
- * Namespace and entry-key grammar tests (PS-011/012, PS-020/021).
+ * Namespace and entry-key grammar tests (SN-011/012, SN-020/021).
  *
  * These guard the boundary between attacker-controlled names and storage
- * paths, plus the namespace→DID binding that authorization depends on — a
+ * paths, plus the namespace→DID binding that authorization depends on - a
  * regression here is a cross-holder leak or a forgeable namespace.
  */
 
@@ -21,32 +21,32 @@ import { identity } from './setup.ts'
 
 const alice = identity('ns-alice')
 
-describe('namespace grammar (PS-011/PS-012)', () => {
+describe('namespace grammar (SN-011/SN-012)', () => {
   test('accepts an encoded did:key genesis namespace', () => {
     expect(validateNamespace(alice.namespace)).toBe(alice.namespace)
   })
 
-  test('rejects colons, non-passport prefixes, and bare junk', () => {
+  test('rejects colons, non-signet prefixes, and bare junk', () => {
     for (const ns of [
-      'passport:did:key:z6Mk', // unencoded DID — colons must not survive
-      `passport:${alice.did}`, // same: raw did:key string
+      'signet:did:key:z6Mk', // unencoded DID - colons must not survive
+      `signet:${alice.did}`, // same: raw did:key string
       'user:alice',
-      'passport:',
-      'passport:rawdid',
+      'signet:',
+      'signet:rawdid',
       '../etc/passwd',
       '',
-      'PASSPORT:did_key_z6Mk',
+      'SIGNET:did_key_z6Mk',
     ]) {
       expect(() => validateNamespace(ns)).toThrow(InvalidNameError)
     }
   })
 
   test('rejects non-did:key methods even when the grammar matches', () => {
-    // PS-002: did:web MUST NOT be a namespace root; no other method exists.
+    // SN-002: did:web MUST NOT be a namespace root; no other method exists.
     for (const ns of [
-      'passport:did_web_example.com',
-      'passport:did_foo_xyz',
-      'passport:did_key_', // empty identifier
+      'signet:did_web_example.com',
+      'signet:did_foo_xyz',
+      'signet:did_key_', // empty identifier
     ]) {
       expect(() => validateNamespace(ns)).toThrow(InvalidNameError)
     }
@@ -59,12 +59,12 @@ describe('genesis DID binding', () => {
   })
 
   test('encode/decode round-trips', () => {
-    expect(encodeDid(alice.did)).toBe(alice.namespace.slice('passport:'.length))
+    expect(encodeDid(alice.did)).toBe(alice.namespace.slice('signet:'.length))
     expect(namespaceForDid(alice.did)).toBe(alice.namespace)
   })
 })
 
-describe('entry-key grammar (PS-020/PS-021)', () => {
+describe('entry-key grammar (SN-020/SN-021)', () => {
   test('accepts section-scoped keys', () => {
     for (const k of [
       'memory/MEMORY.md',

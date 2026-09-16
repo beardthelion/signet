@@ -1,32 +1,32 @@
 {
-  "specVersion": "passport-spec/0.1",
+  "specVersion": "signet-spec/0.1",
   "passphrase": "correct horse battery staple",
-  "namespace": "passport:did_key_z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
-  "keyHex": "e47b9ad6e50419a397b01f2279c5439a87f3a948b9f59fe6ee98975d71f70c69",
+  "namespace": "signet:did_key_z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq",
+  "keyHex": "05dc4f843a88140591b4167c720e76320ac94034eca9242e71631fcdc86cee91",
   "entries": {
     "memory/MEMORY.md": {
       "plaintext": "---\ntype: note\nprovenance: spec/vector\n---\nRemember the spec.\n",
-      "blob": "ATmZm50Fu7stmMAatDHuPaDJDEIH5nTqdtZ0/VkA/DNvSXGODxYsRUjBU75beYFX12o2fDBiz3JL92HuuP0qnbzqU5+5gXU1xsslY//8qxDCajIZWItA2nst9w=="
+      "blob": "AaqDOsiI03di3Lia4dINK1OwjIUac1hRXuAKwTN7Wvx0LQCE081PQ48KcaPJHNczZ9q/VkrtKSkmHhfZnxrLGgyfCPc20YPXaNInfebrJLPD7jlAcwSJ9VMLzg=="
     },
     "config/settings.json": {
       "plaintext": "{\"model\":\"test-model\",\"theme\":\"dark\"}\n",
-      "blob": "AThcZTQUqmX6qDnexTBlk313HPXvaUy1gmqPXI0vrR3wfUOO6WmpFgpMfFcCSVDdbhKS0m5GCIqZk7uWoqP7FWcVjA=="
+      "blob": "AVkWyclEhP9R4TgP7W5mSqcP+k/vlri7crkD6NpRqX3z0BzpgeHkYLtklVDYrwwwY2qMNZ56yl1nSvVXCxd/SMvSKw=="
     },
     "grants/grant-001.json": {
       "plaintext": "{\"id\":\"g1\",\"action\":\"fs.read\",\"scope\":\"src/**\",\"granted_by\":\"holder\",\"granted_at\":\"2026-01-01T00:00:00Z\"}\n",
-      "blob": "Ad8Q2cqQspiEbr+EiAov9uinqM/O7/xaH8Fk5DWOhnwWrCBsBxjJIOwtkyHKNvKupdRvDjWv2AU3bjDSz3vnEWD8C18fDwLMT8N2ZiXxg3bYfX40qTYOK0A3SW3ymWLnGmO6C273hi/dCOAO7eefctHWEDKclH5o/Vj7GSyrQkeCEMvi0Xrb"
+      "blob": "AWqZO35rIqf5XqHHjvfzdL6Eq5kvGxW7u+ij9eM/WJKh2oOOpMLEBSZUrGfP8KhuJ6qNt1dnR2RGHayHdVSKEP60gIM4wLWdqU6fB0Npe6fH53L2YT4rxTQgspLTrBZHDPh9t2Am3nWnGi3a1tVA1hJc/dW0kFekjFiFejfMER8NYvzaGCow"
     },
     "identity/did.json": {
-      "plaintext": "{\"did\":\"did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo\",\"method\":\"did:key\"}\n",
-      "blob": "ATVE9yf9u8Q2F9D4UBampR2uSdyejdoMb1zNUr1UBMGWJ/NSBGwirgSkIZZWvi/z7vdiaTwm5QWKvCWmRPv234nEOpmOCdSg8IVS+510XDMwHeOlWbjvMLyy9MU61JEAHmI+iXmNi2kc3uxI7su2UX8aKw=="
+      "plaintext": "{\"did\":\"did:key:z6MkpYu6CxU1HJzDK9ntQXu6ZoiihsKTZaGuWHUxW34QzoTq\",\"method\":\"did:key\"}\n",
+      "blob": "AXPjjRwCMsjG2DoPXBk8hB3wNUY3UGuPDP+Fd3MHWmjxVusTi8Mb3cuT8KTISjIDORUYGVlxHbe7kbuGLFdBgcMl8aq+8BZz5xvuu39yw5HpygKNeYO0IVC72SVBM5ZUttFe2rr1cbPSoBDg4NWpbSdxYQ=="
     },
     "sessions/demo/000001": {
-      "plaintext": "{\"role\":\"user\",\"text\":\"hello passport\"}\n",
-      "blob": "AWLIysPMgBhJTpArAzcymEy4SxtHkjwWIneu+SeyOzqT+8+2tmXuYeAmyAcFjWB1ulcALClyXtApEQdR0mVVzn3ITtDi"
+      "plaintext": "{\"role\":\"user\",\"text\":\"hello signet\"}\n",
+      "blob": "AX0hcSdUWmG0YrHcczw98qnwdsdqVICKwWmt7/TBs9/b7ix0nspyp5fMG+iRqyJWac1/U97Pr8HbW0lk0BMIzOL+Gw=="
     },
     "sessions/demo/000002": {
       "plaintext": "{\"role\":\"agent\",\"text\":\"state is yours now\"}\n",
-      "blob": "ARmD07Id/jwx9EJnpDzmQP3Kyt4dEpaxxQB+kvq9FrYkFpuufHcUrvwA9WkRFjWxpqJgG6BRTG/esYBAnjAgkJ2Xftyqgzx4Mbc="
+      "blob": "Aab8V5AFRs8iFdtUJby+E+qSu3vQzYOg8O+xugoNjjrr4IdqEhff7tGL+WmQHmHbFF5/uO7gvfPbVTxpXyO6a8Cjt4nf+3KrHxc="
     }
   }
 }

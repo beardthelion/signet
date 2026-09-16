@@ -14,16 +14,16 @@ import {
 
 describe('Namespace', () => {
   test('accepts encoded did:key genesis namespace', () => {
-    expect(Namespace.safeParse('passport:did_key_z6MkExampleKey123').success).toBe(true)
+    expect(Namespace.safeParse('signet:did_key_z6MkExampleKey123').success).toBe(true)
   })
 
   test('rejects colons in namespace', () => {
-    expect(Namespace.safeParse('passport:did:key:z6Mk').success).toBe(false)
+    expect(Namespace.safeParse('signet:did:key:z6Mk').success).toBe(false)
   })
 
-  test('rejects non-passport namespaces', () => {
+  test('rejects non-signet namespaces', () => {
     expect(Namespace.safeParse('user:alice').success).toBe(false)
-    expect(Namespace.safeParse('passport:rawdid').success).toBe(false)
+    expect(Namespace.safeParse('signet:rawdid').success).toBe(false)
   })
 })
 
@@ -111,7 +111,7 @@ describe('identity documents', () => {
   test('integrity manifest', () => {
     const m = {
       seq: 3,
-      specVersion: 'passport-spec/0.1',
+      specVersion: 'signet-spec/0.1',
       genesisDid: did,
       entries: { 'memory/x.md': `sha256:${'a'.repeat(64)}` },
     }

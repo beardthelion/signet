@@ -1,16 +1,16 @@
 /**
- * PassportClient tests against an in-process stub of the wire contract
+ * SignetClient tests against an in-process stub of the wire contract
  * (SPEC §7). The stub implements challenge/verify auth, the hashes and
  * integrity views, single-entry reads, and the delta upsert with base
- * precondition — the same shapes src/server/handler.ts serves — so the
+ * precondition - the same shapes src/server/handler.ts serves - so the
  * client is exercised end to end without a socket.
  *
  * Covered: init, push/pull round-trips across all five sections (including
- * chunked sessions), delta sync, `skipped` surfaced as an error (PS-081),
- * stale-base 409, and the fail-closed integrity checks (PS-041): a tampered
+ * chunked sessions), delta sync, `skipped` surfaced as an error (SN-081),
+ * stale-base 409, and the fail-closed integrity checks (SN-041): a tampered
  * blob, a forged manifest signer, and a rolled-back seq must all reject.
- * Also the custody export/import round-trip (PS-102) and rotation auth
- * (PS-050..053).
+ * Also the custody export/import round-trip (SN-102) and rotation auth
+ * (SN-050..053).
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -20,11 +20,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   MANIFEST_ENTRY_KEY,
-  PassportClient,
-  PassportDecryptError,
-  PassportHttpError,
-  PassportIntegrityError,
-  PassportSkippedError,
+  SignetClient,
+  SignetDecryptError,
+  SignetHttpError,
+  SignetIntegrityError,
+  SignetSkippedError,
   sessionEntryKey,
 } from '../src/client/client.ts'
 import { ciphertextHash, deriveKey, encryptEntry } from '../src/client/crypto.ts'
@@ -43,7 +43,7 @@ import type { RotationAttestation } from '../src/types/index.ts'
 
 // ─── In-process wire stub ───────────────────────────────────────────────
 
-const SPEC_VERSION = 'passport-spec/0.1'
+const SPEC_VERSION = 'signet-spec/0.1'
 const ENTRY_CAP = 1024 // decoded bytes; trips the skipped path in tests
 
 function sha256Prefixed(bytes: Uint8Array): string {
@@ -60,9 +60,9 @@ function stubManifestHash(hashes: Record<string, string>): string {
 }
 const EMPTY_BASE = stubManifestHash({})
 
-/** Decode `passport:did_<method>_<id>` back to `did:<method>:<id>`. */
+/** Decode `signet:did_<method>_<id>` back to `did:<method>:<id>`. */
 function genesisOf(ns: string): string {
-  const enc = ns.slice('passport:'.length)
+  const enc = ns.slice('signet:'.length)
   const a = enc.indexOf('_')
   const b = enc.indexOf('_', a + 1)
   return `${enc.slice(0, a)}:${enc.slice(a + 1, b)}:${enc.slice(b + 1)}`
@@ -153,7 +153,7 @@ function makeStub() {
         attestations?: RotationAttestation[]
       }
       if (!nonces.delete(nonce)) return apiError('invalid_nonce', 401)
-      if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${nonce}`), sig)) {
+      if (!verifyDidSignature(did, new TextEncoder().encode(`signet-auth:${nonce}`), sig)) {
         return apiError('invalid_signature', 401)
       }
       if (attestations !== undefined) {
@@ -168,14 +168,14 @@ function makeStub() {
       return json({ token, expiresAt: new Date(Date.now() + 600_000).toISOString() })
     }
 
-    if (!path.startsWith('/passport/')) return apiError('not_found', 404)
+    if (!path.startsWith('/signet/')) return apiError('not_found', 404)
     const auth = /Bearer\s+(.+)/.exec(
       String((init?.headers as Record<string, string>)?.authorization ?? ''),
     )
     const did = auth ? tokens.get(auth[1]!) : undefined
     if (!did) return apiError('unauthorized', 401)
 
-    const rest = decodeURIComponent(path.slice('/passport/'.length))
+    const rest = decodeURIComponent(path.slice('/signet/'.length))
     const slash = rest.indexOf('/')
     const ns = slash === -1 ? rest : rest.slice(0, slash)
     const entryKey = slash === -1 ? null : rest.slice(slash + 1)
@@ -254,7 +254,7 @@ function makeStub() {
     fetchFn: fetchImpl as typeof fetch,
     manifests,
     blobs,
-    /** The live token map — tests clear it to force a 401/re-auth. */
+    /** The live token map - tests clear it to force a 401/re-auth. */
     tokens,
     /** Force the next PUT to answer 409 stale_base. */
     tripNextPut: () => {
@@ -283,8 +283,8 @@ function clientFor(
     attestations?: RotationAttestation[]
     lastSeq?: number
   },
-): PassportClient {
-  return new PassportClient({
+): SignetClient {
+  return new SignetClient({
     url: 'http://stub',
     fetchFn: stub.fetchFn,
     identity,
@@ -310,7 +310,7 @@ describe('init + push/pull round-trip', () => {
     expect(out.entries[MANIFEST_ENTRY_KEY]).toBeDefined()
   })
 
-  test('init refuses to run over an existing passport', async () => {
+  test('init refuses to run over an existing signet', async () => {
     const stub = makeStub()
     const id = generateIdentity()
     await clientFor(stub, id).init()
@@ -349,7 +349,7 @@ describe('init + push/pull round-trip', () => {
     expect(manifest.manifest.entries[MANIFEST_ENTRY_KEY]).toBeUndefined()
   })
 
-  test('a no-change push is a no-op — no PUT, no seq burn', async () => {
+  test('a no-change push is a no-op - no PUT, no seq burn', async () => {
     const stub = makeStub()
     const id = generateIdentity()
     const client = clientFor(stub, id)
@@ -367,7 +367,7 @@ describe('init + push/pull round-trip', () => {
   })
 })
 
-describe('integrity — fail closed (PS-041)', () => {
+describe('integrity - fail closed (SN-041)', () => {
   test('a tampered blob fails the manifest hash check on pull', async () => {
     const stub = makeStub()
     const id = generateIdentity()
@@ -377,7 +377,7 @@ describe('integrity — fail closed (PS-041)', () => {
     // Corrupt the stored ciphertext under its manifest hash.
     const hash = stub.hashOf(ns, 'memory/a.md')!
     stub.blobs.set(`${ns}|${hash}`, Buffer.from('forged ciphertext'))
-    await expect(client.pull()).rejects.toThrow(PassportIntegrityError)
+    await expect(client.pull()).rejects.toThrow(SignetIntegrityError)
   })
 
   test('a manifest signed by an unauthorized key is rejected', async () => {
@@ -406,9 +406,9 @@ describe('integrity — fail closed (PS-041)', () => {
     stub.blobs.set(`${ns}|${hash}`, Buffer.from(blob, 'base64'))
     stub.repointEntry(ns, MANIFEST_ENTRY_KEY, hash)
 
-    await expect(client.pull()).rejects.toThrow(PassportIntegrityError)
+    await expect(client.pull()).rejects.toThrow(SignetIntegrityError)
     // And the same tamper must block a push building on it.
-    await expect(client.push({ 'memory/b.md': 'x\n' })).rejects.toThrow(PassportIntegrityError)
+    await expect(client.push({ 'memory/b.md': 'x\n' })).rejects.toThrow(SignetIntegrityError)
   })
 
   test('a rolled-back manifest seq is rejected', async () => {
@@ -430,7 +430,7 @@ describe('integrity — fail closed (PS-041)', () => {
     const ns = namespaceFor(id.did)
     const client = clientFor(stub, id)
     await client.push({ 'memory/a.md': 'v1\n' })
-    // Same seq, different entries, validly signed — still a replacement.
+    // Same seq, different entries, validly signed - still a replacement.
     const other = {
       seq: client.manifestSeq,
       specVersion: SPEC_VERSION,
@@ -453,13 +453,13 @@ describe('integrity — fail closed (PS-041)', () => {
     const stub = makeStub()
     const id = generateIdentity()
     await clientFor(stub, id).push({ 'memory/a.md': 'v1\n' })
-    const wrong = new PassportClient({
+    const wrong = new SignetClient({
       url: 'http://stub',
       fetchFn: stub.fetchFn,
       identity: id,
       passphrase: 'wrong passphrase',
     })
-    await expect(wrong.pull()).rejects.toThrow(PassportDecryptError)
+    await expect(wrong.pull()).rejects.toThrow(SignetDecryptError)
   })
 
   test('a push fails closed when the unsigned hashes view disagrees with the signed manifest', async () => {
@@ -469,10 +469,10 @@ describe('integrity — fail closed (PS-041)', () => {
     const client = clientFor(stub, id)
     await client.push({ 'memory/a.md': 'v1\n' })
     // The store plants a key in its unsigned view that the signed manifest
-    // never named — the client must refuse to sign that view into the next
+    // never named - the client must refuse to sign that view into the next
     // manifest rather than adopt it.
     stub.manifests.get(ns)!.set('memory/planted.md', { hash: `sha256:${'0'.repeat(64)}`, size: 1 })
-    await expect(client.push({ 'memory/b.md': 'v2\n' })).rejects.toThrow(PassportIntegrityError)
+    await expect(client.push({ 'memory/b.md': 'v2\n' })).rejects.toThrow(SignetIntegrityError)
     // The verified manifest is untouched; pull still works.
     const out = await client.pull()
     expect(out.entries['memory/a.md']).toBe('v1\n')
@@ -480,7 +480,7 @@ describe('integrity — fail closed (PS-041)', () => {
 })
 
 describe('wire failures surface honestly', () => {
-  test('skipped entries are thrown, never silently dropped (PS-081)', async () => {
+  test('skipped entries are thrown, never silently dropped (SN-081)', async () => {
     const stub = makeStub()
     const id = generateIdentity()
     const client = clientFor(stub, id)
@@ -489,11 +489,11 @@ describe('wire failures surface honestly', () => {
       await client.push({ 'memory/ok.md': 'fine\n', 'memory/big.md': big })
       expect.unreachable('push should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(PassportSkippedError)
-      expect((err as PassportSkippedError).skipped).toEqual([
+      expect(err).toBeInstanceOf(SignetSkippedError)
+      expect((err as SignetSkippedError).skipped).toEqual([
         { key: 'memory/big.md', reason: 'entry_too_large' },
       ])
-      expect((err as PassportSkippedError).accepted).toContain('memory/ok.md')
+      expect((err as SignetSkippedError).accepted).toContain('memory/ok.md')
     }
     // The refusal must not leave the client's seq state pinned to a manifest
     // that was never published: the next pull verifies the corrected
@@ -517,9 +517,9 @@ describe('wire failures surface honestly', () => {
       await client.push({ 'memory/a.md': 'v2\n' })
       expect.unreachable('push should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(PassportHttpError)
-      expect((err as PassportHttpError).status).toBe(409)
-      expect((err as PassportHttpError).code).toBe('stale_base')
+      expect(err).toBeInstanceOf(SignetHttpError)
+      expect((err as SignetHttpError).status).toBe(409)
+      expect((err as SignetHttpError).code).toBe('stale_base')
     }
   })
 
@@ -536,7 +536,7 @@ describe('wire failures surface honestly', () => {
   })
 })
 
-describe('rotation (PS-050..053)', () => {
+describe('rotation (SN-050..053)', () => {
   test('rotate records an attestation entry and the successor can auth + sync', async () => {
     const stub = makeStub()
     const genesis = generateIdentity()
@@ -548,7 +548,7 @@ describe('rotation (PS-050..053)', () => {
     expect(attestation.genesisDid).toBe(genesis.did)
     expect(attestation.newDid).toBe(successor.did)
     expect(attestation.prevHash).toBe('0'.repeat(64))
-    // Signed by the predecessor (genesis) key, per PS-051.
+    // Signed by the predecessor (genesis) key, per SN-051.
     const body = {
       genesisDid: attestation.genesisDid,
       newDid: attestation.newDid,
@@ -557,12 +557,12 @@ describe('rotation (PS-050..053)', () => {
     }
     expect(verifyDidSignature(genesis.did, canonicalJson(body), attestation.sig)).toBe(true)
 
-    // The recorded entry landed in the passport.
+    // The recorded entry landed in the signet.
     const out = await client.pull()
     expect(out.entries['identity/rotations/1.json']).toContain(successor.did)
 
     // A successor client authenticates by presenting the chain, and the
-    // namespace stays bound to the genesis DID (PS-053).
+    // namespace stays bound to the genesis DID (SN-053).
     const next = clientFor(stub, successor, {
       genesisDid: genesis.did,
       attestations: chain,
@@ -578,9 +578,9 @@ describe('rotation (PS-050..053)', () => {
   })
 })
 
-describe('custody export/import (PS-102)', () => {
+describe('custody export/import (SN-102)', () => {
   test('bundle round-trips secrets; wrong export passphrase fails', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'passport-custody-'))
+    const dir = mkdtempSync(join(tmpdir(), 'signet-custody-'))
     const id = generateIdentity()
     const secrets = {
       version: 1 as const,
@@ -591,7 +591,7 @@ describe('custody export/import (PS-102)', () => {
       manifestSeqs: { [namespaceFor(id.did)]: 3 },
     }
     await saveCustody(secrets, dir)
-    // The custody file is owner-only (PS-101).
+    // The custody file is owner-only (SN-101).
     expect(statSync(join(dir, 'custody.json')).mode & 0o777).toBe(0o600)
 
     const bundle = exportBundle(secrets, 'export pass')
@@ -603,7 +603,7 @@ describe('custody export/import (PS-102)', () => {
     expect(restored.genesisDid).toBe(id.did)
     expect(restored.passphrase).toBe(PASS)
     expect(identityFromPkcs8(Buffer.from(restored.pkcs8, 'base64')).did).toBe(id.did)
-    // The PS-041 anti-rollback floor must cross machines with the secrets.
+    // The SN-041 anti-rollback floor must cross machines with the secrets.
     expect(restored.manifestSeqs).toEqual({ [namespaceFor(id.did)]: 3 })
 
     expect(() => importBundle(bundle, 'wrong pass')).toThrow()

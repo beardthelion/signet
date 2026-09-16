@@ -1,10 +1,10 @@
 /**
- * Learning capture tests (PS-120): distillation types learnings into the
+ * Learning capture tests (SN-120): distillation types learnings into the
  * memory taxonomy, capture renders them as `memory/<type>/<slug>.md` entries
- * with PS-120 frontmatter, the secret scan refuses credential-shaped
+ * with SN-120 frontmatter, the secret scan refuses credential-shaped
  * content before it can be written, identical content dedupes through the
  * manifest hash, and a learned entry written through capture is recallable
- * through the MCP tools layer in a later session — the cross-harness
+ * through the MCP tools layer in a later session - the cross-harness
  * compounding claim.
  *
  * The store is the same in-process wire-contract stub mcp.test.ts uses, so
@@ -14,7 +14,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { MANIFEST_ENTRY_KEY, PassportClient } from '../src/client/client.ts'
+import { MANIFEST_ENTRY_KEY, SignetClient } from '../src/client/client.ts'
 import { generateIdentity, verifyDidSignature } from '../src/client/identity.ts'
 import { captureLearnings, captureSession, renderLearningEntry } from '../src/learn/capture.ts'
 import { distillSession } from '../src/learn/distill.ts'
@@ -72,7 +72,7 @@ function makeStub() {
     if (path === '/auth/verify' && method === 'POST') {
       const { did, nonce, sig } = body as { did: string; nonce: string; sig: string }
       if (!nonces.delete(nonce)) return apiError('invalid_nonce', 401)
-      if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${nonce}`), sig)) {
+      if (!verifyDidSignature(did, new TextEncoder().encode(`signet-auth:${nonce}`), sig)) {
         return apiError('invalid_signature', 401)
       }
       const token = `tok-${++counter}`
@@ -80,13 +80,13 @@ function makeStub() {
       return json({ token, expiresAt: new Date(Date.now() + 600_000).toISOString() })
     }
 
-    if (!path.startsWith('/passport/')) return apiError('not_found', 404)
+    if (!path.startsWith('/signet/')) return apiError('not_found', 404)
     const auth = /Bearer\s+(.+)/.exec(
       String((init?.headers as Record<string, string>)?.authorization ?? ''),
     )
     if (!auth || !tokens.has(auth[1]!)) return apiError('unauthorized', 401)
 
-    const rest = decodeURIComponent(path.slice('/passport/'.length))
+    const rest = decodeURIComponent(path.slice('/signet/'.length))
     const slash = rest.indexOf('/')
     const ns = slash === -1 ? rest : rest.slice(0, slash)
     const entryKey = slash === -1 ? null : rest.slice(slash + 1)
@@ -148,7 +148,7 @@ const PASS = 'learn test passphrase'
 function rig() {
   const stub = makeStub()
   const id = generateIdentity()
-  const client = new PassportClient({
+  const client = new SignetClient({
     url: 'http://stub',
     fetchFn: stub.fetchFn,
     identity: id,
@@ -157,9 +157,9 @@ function rig() {
   return { stub, id, client }
 }
 
-/** A second client over the same stub — the later session / other harness. */
-function secondClient(r: ReturnType<typeof rig>): PassportClient {
-  return new PassportClient({
+/** A second client over the same stub - the later session / other harness. */
+function secondClient(r: ReturnType<typeof rig>): SignetClient {
+  return new SignetClient({
     url: 'http://stub',
     fetchFn: r.stub.fetchFn,
     identity: r.id,
@@ -172,7 +172,7 @@ const SESSION = [
   'assistant: You run the deploy script.',
   'user: I prefer pnpm over npm for all package management in this repo.',
   'assistant: noted.',
-  'assistant: we decided to store agent state in the passport, not in vendor clouds.',
+  'assistant: we decided to store agent state in the signet, not in vendor clouds.',
   'assistant: the root cause was a stale manifest seq; fixed by re-reading before push.',
   'assistant: the runbook for deploys is at https://internal.example.com/runbooks/deploy.',
   'user: thanks',
@@ -181,11 +181,11 @@ const SESSION = [
 // ─── Distillation ───────────────────────────────────────────────────────
 
 describe('distillSession', () => {
-  test('types learnings into the PS-120 memory taxonomy', () => {
+  test('types learnings into the SN-120 memory taxonomy', () => {
     const learnings = distillSession(SESSION)
     const byType = new Map(learnings.map(l => [l.type, l]))
     expect(byType.get('user')?.body).toContain('pnpm')
-    expect(byType.get('project')?.body).toContain('passport')
+    expect(byType.get('project')?.body).toContain('signet')
     expect(byType.get('feedback')?.body).toContain('root cause')
     expect(byType.get('reference')?.body).toContain('runbook')
   })
@@ -222,12 +222,12 @@ describe('distillSession', () => {
 // ─── Entry shape ────────────────────────────────────────────────────────
 
 describe('renderLearningEntry', () => {
-  test('renders memory/<type>/<slug>.md with PS-120 frontmatter', () => {
+  test('renders memory/<type>/<slug>.md with SN-120 frontmatter', () => {
     const { key, content } = renderLearningEntry(
       {
         type: 'project',
-        title: 'We decided to store agent state in the passport.',
-        body: 'we decided to store agent state in the passport, not in vendor clouds.\n',
+        title: 'We decided to store agent state in the signet.',
+        body: 'we decided to store agent state in the signet, not in vendor clouds.\n',
       },
       'fx',
     )
@@ -306,7 +306,7 @@ describe('captureSession', () => {
     expect(outcome.uploaded).toHaveLength(1)
     expect(outcome.uploaded[0]).toContain('memory/user/')
 
-    // The refused content never reached the store — ciphertext or plaintext.
+    // The refused content never reached the store - ciphertext or plaintext.
     const pulled = await client.pull()
     expect(Object.keys(pulled.entries).some(k => k.includes('token'))).toBe(false)
     expect(Object.values(pulled.entries).join('\n')).not.toContain('ghp_')

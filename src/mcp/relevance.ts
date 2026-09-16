@@ -1,11 +1,11 @@
 /**
- * Local relevance ranking for passport_recall.
+ * Local relevance ranking for signet_recall.
  *
  * Recall happens entirely client-side: the store only ever holds ciphertext
- * (PS-034), so it cannot rank for us. The client pulls and decrypts, then each
+ * (SN-034), so it cannot rank for us. The client pulls and decrypts, then each
  * entry is scored against the query with a small TF-style ranker tuned for
- * passport entries: matches in the YAML frontmatter (memory entries carry
- * `type:`/`provenance:` per PS-120) and in the entry key count for more than
+ * signet entries: matches in the YAML frontmatter (memory entries carry
+ * `type:`/`provenance:` per SN-120) and in the entry key count for more than
  * matches buried in the body, and an entry must cover a decent share of the
  * query terms to rank at all.
  */

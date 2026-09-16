@@ -1,27 +1,27 @@
 /**
- * PassportClient — the zero-knowledge sync client (SPEC §7).
+ * SignetClient - the zero-knowledge sync client (SPEC §7).
  *
  * Wraps the crypto, the identity, and the HTTP contract so callers (the CLI,
  * the MCP adapter, a harness) work in plaintext and never touch ciphertext
  * or the wire format. Encryption and signing happen in-process with keys
  * from the custody store; the passphrase and private key never leave this
- * machine. Everything the server can see stays inside the PS-034 metadata
+ * machine. Everything the server can see stays inside the SN-034 metadata
  * boundary: entry keys, ciphertext, sizes/hashes, the signed integrity
  * manifest, and rotation attestations.
  *
  * The wire protocol (SPEC §7.1):
  *   POST /auth/challenge            → {nonce, expiresAt}
  *   POST /auth/verify {did, nonce, sig, attestations?} → {token, expiresAt}
- *     (sig is Ed25519 over the UTF-8 bytes of "passport-auth:" + nonce)
- *   GET  /passport/<ns>             → manifest view (entry metadata)
- *   GET  /passport/<ns>?view=hashes → {entryKey: sha256-hash} for delta sync
- *   GET  /passport/<ns>?view=integrity → the signed identity/manifest.json blob
- *   GET  /passport/<ns>/<entryKey>  → one ciphertext blob
- *   PUT  /passport/<ns>             → {base, entries} delta upsert
+ *     (sig is Ed25519 over the UTF-8 bytes of "signet-auth:" + nonce)
+ *   GET  /signet/<ns>             → manifest view (entry metadata)
+ *   GET  /signet/<ns>?view=hashes → {entryKey: sha256-hash} for delta sync
+ *   GET  /signet/<ns>?view=integrity → the signed identity/manifest.json blob
+ *   GET  /signet/<ns>/<entryKey>  → one ciphertext blob
+ *   PUT  /signet/<ns>             → {base, entries} delta upsert
  *
- * Integrity (PS-040/041): the client writes `identity/manifest.json`, a
+ * Integrity (SN-040/041): the client writes `identity/manifest.json`, a
  * signed {seq, specVersion, genesisDid, entries} document mapping each entry
- * key to its ciphertext hash (the manifest's own key is excluded — a
+ * key to its ciphertext hash (the manifest's own key is excluded - a
  * self-referential hash cannot exist). On pull the client verifies the
  * signature against the currently authorized DID and fails closed on a
  * tampered, unsigned, or rolled-back manifest; on push it refuses to build
@@ -48,12 +48,12 @@ import {
 } from './identity.ts'
 import { enforce, type Finding, type ScanMode } from './secretscan.ts'
 
-const SPEC_VERSION = 'passport-spec/0.1'
+const SPEC_VERSION = 'signet-spec/0.1'
 
-/** The entry carrying the signed integrity manifest (PS-040). */
+/** The entry carrying the signed integrity manifest (SN-040). */
 export const MANIFEST_ENTRY_KEY = 'identity/manifest.json'
 
-/** did.json payload — the same shape scripts/gen-vectors.ts emits. */
+/** did.json payload - the same shape scripts/gen-vectors.ts emits. */
 export function didDocument(did: string): string {
   return `${JSON.stringify({ did, method: 'did:key' })}\n`
 }
@@ -62,7 +62,7 @@ export function didDocument(did: string): string {
  * The manifest hash a PUT's `base` refers to: `sha256:` hex over the sorted
  * `key\thash` lines of the entry-hash map. Both sides compute it from the
  * bare ?view=hashes map, so the wire never needs a second digest field.
- * Reimplemented here rather than imported from src/server — the client is
+ * Reimplemented here rather than imported from src/server - the client is
  * the other side of the trust boundary and does not depend on server modules.
  */
 export function manifestHash(entryHashes: Record<string, string>): string {
@@ -73,7 +73,7 @@ export function manifestHash(entryHashes: Record<string, string>): string {
   return `sha256:${sha256Hex(lines)}`
 }
 
-/** A session chunk's entry key: `sessions/<id>/<zero-padded seq>` (PS-022). */
+/** A session chunk's entry key: `sessions/<id>/<zero-padded seq>` (SN-022). */
 export function sessionEntryKey(id: string, seq: number): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
     throw new Error(`invalid session id: ${JSON.stringify(id)}`)
@@ -82,31 +82,31 @@ export function sessionEntryKey(id: string, seq: number): string {
   return `sessions/${id}/${String(seq).padStart(6, '0')}`
 }
 
-export type PassportClientOptions = {
+export type SignetClientOptions = {
   /** Base URL, e.g. http://localhost:8080 (no trailing slash needed). */
   url: string
   /** Active signing identity. Equals genesis until a rotation lands. */
   identity: Identity
-  /** The passport's immutable root DID. Defaults to identity.did. */
+  /** The signet's immutable root DID. Defaults to identity.did. */
   genesisDid?: string
   /** Rotation chain to present at /auth/verify (post-rotation auth). */
   attestations?: RotationAttestation[]
   /** Passphrase the entry key is derived from. Never sent to the server. */
   passphrase: string
-  /** Secret-scan policy before encryption. Default `block` (PS-110). */
+  /** Secret-scan policy before encryption. Default `block` (SN-110). */
   scanMode?: ScanMode
   onScanWarning?: (findings: Finding[]) => void
   /** Per-request budget in ms. Default 120s. */
   timeoutMs?: number
-  /** Last verified manifest seq, e.g. from custody (PS-041 anti-rollback). */
+  /** Last verified manifest seq, e.g. from custody (SN-041 anti-rollback). */
   lastSeq?: number
-  /** Injectable fetch — the wire boundary, mocked in tests. */
+  /** Injectable fetch - the wire boundary, mocked in tests. */
   fetchFn?: typeof fetch
 }
 
 export type PullResult = {
   namespace: string
-  /** The verified manifest seq (0 when the passport does not exist yet). */
+  /** The verified manifest seq (0 when the signet does not exist yet). */
   seq: number
   /** entryKey -> decrypted plaintext. */
   entries: Record<string, string>
@@ -122,7 +122,7 @@ export type PushResult = {
 }
 
 /** A refusal from the server, carrying its error code and details verbatim. */
-export class PassportHttpError extends Error {
+export class SignetHttpError extends Error {
   constructor(
     message: string,
     readonly status: number,
@@ -130,52 +130,52 @@ export class PassportHttpError extends Error {
     readonly details?: Record<string, unknown>,
   ) {
     super(message)
-    this.name = 'PassportHttpError'
+    this.name = 'SignetHttpError'
   }
 }
 
-/** The integrity manifest failed verification or rollback checks (PS-041). */
-export class PassportIntegrityError extends Error {
+/** The integrity manifest failed verification or rollback checks (SN-041). */
+export class SignetIntegrityError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = 'PassportIntegrityError'
+    this.name = 'SignetIntegrityError'
   }
 }
 
 /** A blob did not decrypt with this client's key or hash-check failed. */
-export class PassportDecryptError extends Error {
+export class SignetDecryptError extends Error {
   constructor(
     readonly entryKey: string,
     readonly reason: string,
   ) {
-    super(`passport: could not decrypt "${entryKey}": ${reason}`)
-    this.name = 'PassportDecryptError'
+    super(`signet: could not decrypt "${entryKey}": ${reason}`)
+    this.name = 'SignetDecryptError'
   }
 }
 
-/** The server refused some entries of a push (PS-081: skipped, not dropped). */
-export class PassportSkippedError extends Error {
+/** The server refused some entries of a push (SN-081: skipped, not dropped). */
+export class SignetSkippedError extends Error {
   constructor(
     readonly skipped: { key: string; reason: string }[],
     readonly accepted: string[],
   ) {
     super(
-      `passport: server refused ${skipped.length} entr${skipped.length === 1 ? 'y' : 'ies'}: ` +
+      `signet: server refused ${skipped.length} entr${skipped.length === 1 ? 'y' : 'ies'}: ` +
         skipped.map(s => `${s.key} (${s.reason})`).join(', ') +
         (accepted.length ? `. ${accepted.length} other entries were stored` : ''),
     )
-    this.name = 'PassportSkippedError'
+    this.name = 'SignetSkippedError'
   }
 }
 
 /** The server accepted the connection and then did not answer in time. */
-export class PassportTimeoutError extends Error {
+export class SignetTimeoutError extends Error {
   constructor(
     readonly operation: string,
     readonly timeoutMs: number,
   ) {
-    super(`passport: ${operation} got no answer within ${timeoutMs}ms`)
-    this.name = 'PassportTimeoutError'
+    super(`signet: ${operation} got no answer within ${timeoutMs}ms`)
+    this.name = 'SignetTimeoutError'
   }
 }
 
@@ -188,11 +188,11 @@ type VerifiedManifest = {
   seq: number
   canonical: string
   signed: SignedManifest
-  /** The decrypted manifest entry — passport state, exposed on pull. */
+  /** The decrypted manifest entry - signet state, exposed on pull. */
   plaintext: string
 }
 
-export class PassportClient {
+export class SignetClient {
   private readonly url: string
   private readonly identity: Identity
   private readonly genesisDid: string
@@ -206,11 +206,11 @@ export class PassportClient {
   private token: { value: string; expiresAt: number } | null = null
   /** In-flight challenge/verify, so parallel requests share one auth round. */
   private authInflight: Promise<void> | null = null
-  /** PS-041 state: last verified seq and the manifest bytes it belonged to. */
+  /** SN-041 state: last verified seq and the manifest bytes it belonged to. */
   private lastSeq: number
   private lastManifestCanonical: string | null = null
 
-  constructor(opts: PassportClientOptions) {
+  constructor(opts: SignetClientOptions) {
     this.url = opts.url.replace(/\/$/, '')
     this.identity = opts.identity
     this.genesisDid = opts.genesisDid ?? opts.identity.did
@@ -223,7 +223,7 @@ export class PassportClient {
     this.encKey = deriveKey(opts.passphrase, this.namespace)
   }
 
-  /** The passport namespace — bound to the genesis DID forever (PS-010/053). */
+  /** The signet namespace - bound to the genesis DID forever (SN-010/053). */
   get namespace(): string {
     return namespaceFor(this.genesisDid)
   }
@@ -236,7 +236,7 @@ export class PassportClient {
   /**
    * The DIDs allowed to have signed an integrity manifest: the genesis DID
    * plus every successor named by the presented rotation chain. Wire auth is
-   * stricter — the server authorizes only the chain's terminal DID (PS-052) —
+   * stricter - the server authorizes only the chain's terminal DID (SN-052) -
    * but a manifest signed while an earlier key still held authority stays
    * valid after rotation, so the check here is "a key that held authority",
    * not "the current key".
@@ -250,10 +250,10 @@ export class PassportClient {
   // ─── Transport ────────────────────────────────────────────────────────
 
   /**
-   * Challenge/response auth (PS-090): a fresh nonce, signed by the active
+   * Challenge/response auth (SN-090): a fresh nonce, signed by the active
    * key, exchanged for a bearer. The rotation chain rides along whenever the
    * active key is a successor, so the server can re-root authorization at
-   * the genesis DID (PS-052).
+   * the genesis DID (SN-052).
    */
   private authenticate(): Promise<void> {
     this.authInflight ??= this.doAuthenticate().finally(() => {
@@ -266,7 +266,7 @@ export class PassportClient {
     const challenge = await this.rawRequest('POST', `${this.url}/auth/challenge`)
     if (!challenge.ok) throw httpError(challenge)
     const { nonce } = JSON.parse(challenge.raw) as { nonce?: string }
-    if (typeof nonce !== 'string') throw new Error('passport: challenge returned no nonce')
+    if (typeof nonce !== 'string') throw new Error('signet: challenge returned no nonce')
     const body: Record<string, unknown> = {
       did: this.identity.did,
       nonce,
@@ -286,7 +286,7 @@ export class PassportClient {
     )
     if (!verified.ok) throw httpError(verified)
     const data = JSON.parse(verified.raw) as { token?: string; expiresAt?: string }
-    if (typeof data.token !== 'string') throw new Error('passport: verify returned no token')
+    if (typeof data.token !== 'string') throw new Error('signet: verify returned no token')
     const expMs = data.expiresAt ? Date.parse(data.expiresAt) : Number.NaN
     this.token = {
       value: data.token,
@@ -308,13 +308,13 @@ export class PassportClient {
         body,
         signal: AbortSignal.timeout(this.timeoutMs),
       })
-      // A failed body read is a failed request, not an empty one — swallowing
+      // A failed body read is a failed request, not an empty one - swallowing
       // it would turn a broken response into a phantom "empty body" answer.
       const raw = await res.text()
       return { ok: res.ok, status: res.status, statusText: res.statusText, raw }
     } catch (err) {
       if ((err as Error)?.name === 'TimeoutError') {
-        throw new PassportTimeoutError(`${method} ${url}`, this.timeoutMs)
+        throw new SignetTimeoutError(`${method} ${url}`, this.timeoutMs)
       }
       throw err
     }
@@ -346,20 +346,20 @@ export class PassportClient {
   }
 
   private endpoint(): string {
-    return `/passport/${encodeURIComponent(this.namespace)}`
+    return `/signet/${encodeURIComponent(this.namespace)}`
   }
 
   private entryPath(entryKey: string): string {
     return `${this.endpoint()}/${entryKey.split('/').map(encodeURIComponent).join('/')}`
   }
 
-  /** The ?view=hashes map, or null when the passport does not exist yet. */
+  /** The ?view=hashes map, or null when the signet does not exist yet. */
   private async hashesView(): Promise<Record<string, string> | null> {
     const res = await this.request('GET', `${this.endpoint()}?view=hashes`)
     if (res.status === 404) {
       const err = httpError(res)
       // Only the server's own "nothing here" is emptiness; any other 404 is
-      // a wrong URL or a proxy, not an empty passport.
+      // a wrong URL or a proxy, not an empty signet.
       if (err.code !== 'empty') throw err
       return null
     }
@@ -381,18 +381,18 @@ export class PassportClient {
     if (!res.ok) throw httpError(res)
     const body = JSON.parse(res.raw) as { entry?: unknown }
     if (typeof body.entry !== 'string') {
-      throw new Error('passport: integrity view carried no entry')
+      throw new Error('signet: integrity view carried no entry')
     }
     return { status: 'ok', blob: body.entry }
   }
 
-  // ─── Integrity manifest (PS-040/041) ──────────────────────────────────
+  // ─── Integrity manifest (SN-040/041) ──────────────────────────────────
 
   /**
    * Decrypt, parse, and verify a signed manifest blob. Fail closed on every
    * defect: bad signature, wrong signer, wrong genesis, or a seq that went
    * backwards. A manifest re-presented at the same seq must be byte-identical
-   * to the one already verified — equal seq is not a rollback, but equal seq
+   * to the one already verified - equal seq is not a rollback, but equal seq
    * with different bytes is a replacement and fails.
    */
   private verifyManifestBlob(blob: string): VerifiedManifest {
@@ -400,44 +400,42 @@ export class PassportClient {
     try {
       plaintext = decryptEntry(this.encKey, MANIFEST_ENTRY_KEY, blob)
     } catch (err) {
-      throw new PassportDecryptError(MANIFEST_ENTRY_KEY, (err as Error).message)
+      throw new SignetDecryptError(MANIFEST_ENTRY_KEY, (err as Error).message)
     }
     let parsedJson: unknown
     try {
       parsedJson = JSON.parse(plaintext)
     } catch {
-      throw new PassportIntegrityError('passport: integrity manifest is not JSON')
+      throw new SignetIntegrityError('signet: integrity manifest is not JSON')
     }
     const parsed = SignedManifest.safeParse(parsedJson)
     if (!parsed.success) {
-      throw new PassportIntegrityError('passport: integrity manifest is malformed')
+      throw new SignetIntegrityError('signet: integrity manifest is malformed')
     }
     const signed = parsed.data
     if (signed.manifest.genesisDid !== this.genesisDid) {
-      throw new PassportIntegrityError('passport: manifest names a different genesis DID')
+      throw new SignetIntegrityError('signet: manifest names a different genesis DID')
     }
     if (!this.authorizedDids().has(signed.did)) {
-      throw new PassportIntegrityError(
-        `passport: manifest signed by ${signed.did}, which held no authority for this passport`,
+      throw new SignetIntegrityError(
+        `signet: manifest signed by ${signed.did}, which held no authority for this signet`,
       )
     }
     if (!verifyDidSignature(signed.did, canonicalJson(signed.manifest), signed.sig)) {
-      throw new PassportIntegrityError('passport: integrity manifest signature is invalid')
+      throw new SignetIntegrityError('signet: integrity manifest signature is invalid')
     }
     const canonical = canonicalJson(signed.manifest)
     const seq = signed.manifest.seq
     if (seq < this.lastSeq) {
-      throw new PassportIntegrityError(
-        `passport: manifest seq rolled back (${seq} < ${this.lastSeq})`,
-      )
+      throw new SignetIntegrityError(`signet: manifest seq rolled back (${seq} < ${this.lastSeq})`)
     }
     if (
       seq === this.lastSeq &&
       this.lastManifestCanonical !== null &&
       canonical !== this.lastManifestCanonical
     ) {
-      throw new PassportIntegrityError(
-        `passport: manifest at seq ${seq} differs from the manifest already verified`,
+      throw new SignetIntegrityError(
+        `signet: manifest at seq ${seq} differs from the manifest already verified`,
       )
     }
     return { seq, canonical, signed, plaintext }
@@ -445,9 +443,9 @@ export class PassportClient {
 
   /**
    * Build + sign the next manifest over a projected entry-hash map. The
-   * manifest's own key is never listed — a self-hash cannot exist.
+   * manifest's own key is never listed - a self-hash cannot exist.
    * Returns both the encrypted-entry plaintext and the canonical form the
-   * PS-041 same-seq check compares against later.
+   * SN-041 same-seq check compares against later.
    */
   private signManifest(
     entries: Record<string, string>,
@@ -467,15 +465,15 @@ export class PassportClient {
     return { plaintext: canonicalJson(signed), canonical: canonicalJson(manifest) }
   }
 
-  /** Fetch + verify the remote manifest. Null when the passport is empty. */
+  /** Fetch + verify the remote manifest. Null when the signet is empty. */
   private async remoteManifest(): Promise<VerifiedManifest | null> {
     const view = await this.integrityView()
     if (view.status === 'no_namespace') return null
     if (view.status === 'no_entry') {
-      // Entries exist (the namespace does) but nothing signed them — a state
+      // Entries exist (the namespace does) but nothing signed them - a state
       // this client never produces. Fail closed rather than build on it.
-      throw new PassportIntegrityError(
-        'passport: namespace has entries but no signed integrity manifest',
+      throw new SignetIntegrityError(
+        'signet: namespace has entries but no signed integrity manifest',
       )
     }
     return this.verifyManifestBlob(view.blob)
@@ -489,13 +487,13 @@ export class PassportClient {
   // ─── Public operations ────────────────────────────────────────────────
 
   /**
-   * Publish a new passport: `identity/did.json` plus the first signed
+   * Publish a new signet: `identity/did.json` plus the first signed
    * integrity manifest. Refuses to run against a namespace that already
-   * holds a passport — re-init would look identical to a wipe.
+   * holds a signet - re-init would look identical to a wipe.
    */
   async init(): Promise<PushResult> {
     if ((await this.hashesView()) !== null) {
-      throw new Error('passport: namespace already holds a passport; refusing to re-init')
+      throw new Error('signet: namespace already holds a signet; refusing to re-init')
     }
     return this.push({ 'identity/did.json': didDocument(this.genesisDid) })
   }
@@ -503,7 +501,7 @@ export class PassportClient {
   /**
    * Encrypt + delta-push entries, then publish the next signed manifest.
    *
-   * Plaintext is scanned for credential shapes BEFORE encryption (PS-110).
+   * Plaintext is scanned for credential shapes BEFORE encryption (SN-110).
    * Deterministic encryption makes unchanged entries produce identical
    * ciphertext, so only entries whose ciphertext hash differs are uploaded.
    * `identity/manifest.json` is client-managed: a caller-supplied entry under
@@ -511,7 +509,7 @@ export class PassportClient {
    *
    * A push that changes nothing sends no PUT and does not burn a manifest
    * seq. A `skipped` response from the server is surfaced as a thrown
-   * PassportSkippedError — never a silent drop (PS-081).
+   * SignetSkippedError - never a silent drop (SN-081).
    */
   async push(
     entries: Record<string, string>,
@@ -523,13 +521,13 @@ export class PassportClient {
     )
     for (const key of Object.keys(userEntries)) {
       if (!EntryKey.safeParse(key).success) {
-        throw new Error(`passport: invalid entry key ${JSON.stringify(key)}`)
+        throw new Error(`signet: invalid entry key ${JSON.stringify(key)}`)
       }
     }
     const findings = enforce(userEntries, this.scanMode)
     if (findings.length) {
       if (this.onScanWarning) this.onScanWarning(findings)
-      else console.warn(`[passport] ${findings.length} potential secret(s) in pushed entries`)
+      else console.warn(`[signet] ${findings.length} potential secret(s) in pushed entries`)
     }
 
     const [hashes, remote] = await Promise.all([this.hashesView(), this.remoteManifest()])
@@ -541,15 +539,15 @@ export class PassportClient {
     // detection; if its key set disagrees with the verified manifest the
     // store is lying to one of the two views, and signing its version of the
     // world into the next manifest would sign in entries the holder never
-    // wrote. Fail closed (PS-041).
+    // wrote. Fail closed (SN-041).
     const remoteEntries = remote?.signed.manifest.entries ?? {}
     const viewKeys = Object.keys(hashes ?? {}).filter(k => k !== MANIFEST_ENTRY_KEY)
     if (
       viewKeys.length !== Object.keys(remoteEntries).length ||
       viewKeys.some(k => !(k in remoteEntries))
     ) {
-      throw new PassportIntegrityError(
-        'passport: the unsigned hashes view disagrees with the verified integrity manifest',
+      throw new SignetIntegrityError(
+        'signet: the unsigned hashes view disagrees with the verified integrity manifest',
       )
     }
 
@@ -559,7 +557,7 @@ export class PassportClient {
     const uploaded: string[] = []
     const unchanged: string[] = []
     // The next manifest's entry map starts from the verified manifest's
-    // entries — never from the unsigned view.
+    // entries - never from the unsigned view.
     const nextHashes: Record<string, string> = { ...remoteEntries }
     for (const k of deletions) delete nextHashes[k]
 
@@ -610,7 +608,7 @@ export class PassportClient {
       // entries that were actually accepted, then surface the refusal.
       // lastSeq/lastManifestCanonical stay at the adopted remote state: the
       // corrected manifest's bytes are not the ones this client signed
-      // optimistically, so the PS-041 same-seq pin must not record them.
+      // optimistically, so the SN-041 same-seq pin must not record them.
       const repaired: Record<string, string> = { ...nextHashes }
       for (const s of skipped) delete repaired[s.key]
       const fix = this.signManifest(repaired, seq)
@@ -623,7 +621,7 @@ export class PassportClient {
         },
       })
       if (!fixRes.ok) throw httpError(fixRes)
-      throw new PassportSkippedError(skipped, result.accepted ?? [])
+      throw new SignetSkippedError(skipped, result.accepted ?? [])
     }
     this.lastSeq = seq
     this.lastManifestCanonical = manifestCanonical
@@ -645,17 +643,17 @@ export class PassportClient {
     if (!res.ok) throw httpError(res)
     const body = JSON.parse(res.raw) as { entry?: unknown; hash?: unknown }
     if (typeof body.entry !== 'string') {
-      throw new PassportIntegrityError(`passport: no blob in the response for "${entryKey}"`)
+      throw new SignetIntegrityError(`signet: no blob in the response for "${entryKey}"`)
     }
     if (body.hash !== expectedHash || ciphertextHash(body.entry) !== expectedHash) {
-      throw new PassportIntegrityError(
-        `passport: ciphertext hash mismatch for "${entryKey}" — blob does not match the manifest`,
+      throw new SignetIntegrityError(
+        `signet: ciphertext hash mismatch for "${entryKey}" - blob does not match the manifest`,
       )
     }
     try {
       return decryptEntry(this.encKey, entryKey, body.entry)
     } catch (err) {
-      throw new PassportDecryptError(entryKey, (err as Error).message)
+      throw new SignetDecryptError(entryKey, (err as Error).message)
     }
   }
 
@@ -681,8 +679,8 @@ export class PassportClient {
 
   /**
    * Pull + decrypt every entry. The signed manifest is verified first
-   * (PS-041), then each blob's ciphertext hash is checked against it before
-   * decryption — a blob the manifest does not name, or that fails GCM, is a
+   * (SN-041), then each blob's ciphertext hash is checked against it before
+   * decryption - a blob the manifest does not name, or that fails GCM, is a
    * hard error, never a silent skip.
    */
   async pull(): Promise<PullResult> {
@@ -692,7 +690,7 @@ export class PassportClient {
 
     const manifestEntries = remote.signed.manifest.entries
     const entries = await this.fetchEntries(manifestEntries, Object.keys(manifestEntries))
-    // The manifest itself is passport state too; expose it as an entry so a
+    // The manifest itself is signet state too; expose it as an entry so a
     // pulled directory carries the complete document set.
     entries[MANIFEST_ENTRY_KEY] = remote.plaintext
     return { namespace: this.namespace, seq: remote.seq, entries }
@@ -704,7 +702,7 @@ export class PassportClient {
    * manifest is verified once, then each fetched blob is hash-checked
    * against it before decryption. Callers that need a single section (the
    * MCP tools' config_get/grant_list) pay for that section's blobs rather
-   * than the whole passport.
+   * than the whole signet.
    */
   async pullSection(section: Section): Promise<Record<string, string>> {
     const remote = await this.remoteManifest()
@@ -719,7 +717,7 @@ export class PassportClient {
 
   /**
    * The ?view=hashes map: every stored entry key with its ciphertext hash,
-   * no bodies. Empty object when the passport does not exist yet. This is
+   * no bodies. Empty object when the signet does not exist yet. This is
    * the cheap enumeration path for callers (the MCP adapter's list tool)
    * that need keys without downloading and decrypting every entry.
    */
@@ -729,9 +727,9 @@ export class PassportClient {
 
   /**
    * Read and decrypt one entry, verified against the signed manifest
-   * (PS-041): the fetched blob's ciphertext hash must equal the hash the
+   * (SN-041): the fetched blob's ciphertext hash must equal the hash the
    * verified manifest names for the key, and GCM must authenticate under
-   * that key. Returns null when the passport does not exist or the manifest
+   * that key. Returns null when the signet does not exist or the manifest
    * does not name the key; a blob the manifest does not name can never reach
    * decryption.
    */
@@ -745,25 +743,25 @@ export class PassportClient {
     if (!res.ok) throw httpError(res)
     const body = JSON.parse(res.raw) as { entry?: unknown; hash?: unknown }
     if (typeof body.entry !== 'string') {
-      throw new PassportIntegrityError(`passport: no blob in the response for "${entryKey}"`)
+      throw new SignetIntegrityError(`signet: no blob in the response for "${entryKey}"`)
     }
     if (body.hash !== expectedHash || ciphertextHash(body.entry) !== expectedHash) {
-      throw new PassportIntegrityError(
-        `passport: ciphertext hash mismatch for "${entryKey}" — blob does not match the manifest`,
+      throw new SignetIntegrityError(
+        `signet: ciphertext hash mismatch for "${entryKey}" - blob does not match the manifest`,
       )
     }
     try {
       return decryptEntry(this.encKey, entryKey, body.entry)
     } catch (err) {
-      throw new PassportDecryptError(entryKey, (err as Error).message)
+      throw new SignetDecryptError(entryKey, (err as Error).message)
     }
   }
 
   /**
-   * Rotate the signing key (PS-050/051): generate the successor, sign the
+   * Rotate the signing key (SN-050/051): generate the successor, sign the
    * attestation with the CURRENT key, and record it under
-   * `identity/rotations/<seq>.json` in the passport. Returns everything the
-   * caller needs to update custody — the successor key's PKCS8 and the
+   * `identity/rotations/<seq>.json` in the signet. Returns everything the
+   * caller needs to update custody - the successor key's PKCS8 and the
    * extended chain to present on the next auth.
    */
   async rotate(): Promise<{
@@ -792,7 +790,7 @@ export class PassportClient {
 
 // ─── Error mapping ──────────────────────────────────────────────────────
 
-function httpError(res: Answer): PassportHttpError {
+function httpError(res: Answer): SignetHttpError {
   let code = 'unknown'
   let details: Record<string, unknown> | undefined
   try {
@@ -802,10 +800,10 @@ function httpError(res: Answer): PassportHttpError {
     if (body.error?.code) code = body.error.code
     details = body.error?.details
   } catch {
-    // Not JSON — the raw text is all there is to report.
+    // Not JSON - the raw text is all there is to report.
   }
-  return new PassportHttpError(
-    `passport ${res.status} ${safeText(res.statusText)}: ${safeText(res.raw)}`,
+  return new SignetHttpError(
+    `signet ${res.status} ${safeText(res.statusText)}: ${safeText(res.raw)}`,
     res.status,
     code,
     details,
@@ -816,7 +814,7 @@ const MAX_SERVER_TEXT = 200
 
 /**
  * Bound and de-fang text the server chose before it lands in an Error
- * message — a hostile or broken server could otherwise plant an escape
+ * message - a hostile or broken server could otherwise plant an escape
  * sequence or a fake instruction where a human (or a model) reads it.
  */
 function safeText(text: string): string {
