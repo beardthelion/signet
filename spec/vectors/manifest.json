@@ -13,6 +13,6 @@
       "sessions/demo/000002": "sha256:25c92b96e519e0d531a24b2163d7aee1c259db5ab1730ec6091477602f7f6b4a"
     }
   },
-  "signature": "PQE5LprYDByPRDMByTmdI0FtW+WGs1epsfyrwLv6ZM4Cr23MFqymxPS0nILOL2TSboFk2fXG7ufE7a8XoDYHBQ==",
-  "signer": "did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo"
+  "did": "did:key:z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
+  "sig": "PQE5LprYDByPRDMByTmdI0FtW+WGs1epsfyrwLv6ZM4Cr23MFqymxPS0nILOL2TSboFk2fXG7ufE7a8XoDYHBQ=="
 }

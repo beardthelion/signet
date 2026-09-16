@@ -87,20 +87,23 @@ function apiError(
 
 const PASSPORT_PREFIX = '/passport/'
 
+/** Path decode outcome: off-route, malformed escape, or the parsed parts. */
+type PassportPath = { namespace: string; entryKey: string | null } | 'malformed' | null
+
 /**
  * Split `/passport/<ns>/<entryKey...>` into its parts. The namespace is a
  * single segment (no '/' survives its grammar); the rest is the entry key,
- * which may itself contain '/'. Returns null off-route.
+ * which may itself contain '/'. Returns null off-route and 'malformed' when
+ * the percent-encoding itself is broken — that is a 400, not a 404: the
+ * route matched but the path is not decodable.
  */
-function parsePassportPath(
-  pathname: string,
-): { namespace: string; entryKey: string | null } | null {
+function parsePassportPath(pathname: string): PassportPath {
   if (!pathname.startsWith(PASSPORT_PREFIX)) return null
   let rest: string
   try {
     rest = decodeURIComponent(pathname.slice(PASSPORT_PREFIX.length))
   } catch {
-    return null // malformed percent escape; the caller answers not_found
+    return 'malformed'
   }
   if (!rest) return { namespace: '', entryKey: null }
   const slash = rest.indexOf('/')
@@ -196,7 +199,9 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
   // ── Auth endpoints (no bearer required) ──────────────────────────────
   if (pathname === '/auth/challenge') {
     if (req.method !== 'POST') return apiError('method_not_allowed', 'POST only', 405)
-    return json(issueChallenge())
+    const challenge = issueChallenge()
+    if (!challenge) return apiError('rate_limited', 'too many outstanding challenges', 429)
+    return json(challenge)
   }
 
   if (pathname === '/auth/verify') {
@@ -207,6 +212,9 @@ async function respond(req: Request, ctx: RequestContext): Promise<Response> {
 
   // ── Passport data endpoints ──────────────────────────────────────────
   const parsed = parsePassportPath(pathname)
+  if (parsed === 'malformed') {
+    return apiError('bad_request', 'malformed percent-encoding in path', 400)
+  }
   if (!parsed) return apiError('not_found', 'unknown route', 404)
   ctx.route = 'passport'
 
@@ -341,7 +349,9 @@ async function verify(req: Request): Promise<Response> {
   if (!consumeNonce(obj.nonce)) {
     return apiError('invalid_nonce', 'nonce is unknown, expired, or already used', 401)
   }
-  if (!verifyDidSignature(did, new TextEncoder().encode(obj.nonce), obj.sig)) {
+  // The preimage is domain-separated: the same key signs attestations and
+  // manifests, so the nonce is never signed bare (SPEC §7.1).
+  if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${obj.nonce}`), obj.sig)) {
     return apiError('invalid_signature', 'signature does not verify against the DID key', 401)
   }
 
@@ -362,5 +372,7 @@ async function verify(req: Request): Promise<Response> {
     await persistAttestationChain(genesis, chain)
   }
 
-  return json(issueToken(did))
+  const issued = issueToken(did)
+  if (!issued) return apiError('rate_limited', 'too many outstanding tokens', 429)
+  return json(issued)
 }

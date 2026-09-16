@@ -87,7 +87,7 @@ export async function main(): Promise<void> {
         key: z
           .string()
           .describe(
-            'Entry key: <section>/<path>, section one of memory|config|sessions|grants|identity.',
+            'Entry key: <section>/<path>, section one of memory|config|sessions (grants/ is written only by passport_grant_record; identity/ is client-managed).',
           ),
         content: z.string().describe('The entry content (markdown, JSON, transcript chunk).'),
       },

@@ -77,7 +77,7 @@ function makeStub() {
     if (path === '/auth/verify' && method === 'POST') {
       const { did, nonce, sig } = body as { did: string; nonce: string; sig: string }
       if (!nonces.delete(nonce)) return apiError('invalid_nonce', 401)
-      if (!verifyDidSignature(did, new TextEncoder().encode(nonce), sig)) {
+      if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${nonce}`), sig)) {
         return apiError('invalid_signature', 401)
       }
       const token = `tok-${++counter}`
@@ -226,6 +226,58 @@ describe('passport tools over the real encrypted wire path', () => {
     const memoryOnly = await tools.list('memory')
     expect(memoryOnly.text).toContain('memory/a.md')
     expect(memoryOnly.text).not.toContain('config/settings.json')
+  })
+
+  test('list filters keys the unsigned view should not have carried', async () => {
+    // The hashes view is unsigned store output; a hostile store could answer
+    // with arbitrary strings. Only EntryKey-valid keys may reach the model.
+    const fake: PassportToolClient = {
+      namespace: 'passport:did_key_x',
+      push: () => Promise.reject(new Error('unused')),
+      pull: () => Promise.resolve({ namespace: 'x', seq: 0, entries: {} }),
+      hashes: () =>
+        Promise.resolve({
+          'memory/ok.md': `sha256:${'0'.repeat(64)}`,
+          'evil/../escape': `sha256:${'0'.repeat(64)}`,
+          ['memory/'.padEnd(400, 'x')]: `sha256:${'0'.repeat(64)}`,
+        }),
+      readEntry: () => Promise.resolve(null),
+    }
+    const r = await makeTools(fake).list()
+    expect(r.text).toContain('memory/ok.md')
+    expect(r.text).not.toContain('evil/../escape')
+    expect(r.text).not.toContain('xxx')
+  })
+
+  test('search requires a non-empty query', async () => {
+    const { tools } = rig()
+    for (const q of ['', '   ', '\t\n']) {
+      const r = await tools.search(q)
+      expect(r.isError).toBe(true)
+      expect(r.text).toMatch(/non-empty/)
+    }
+  })
+
+  test('recall bounds a large entry and marks the truncation', async () => {
+    const { tools } = rig()
+    await tools.save('memory/huge.md', `word ${'x'.repeat(20_000)}\n`)
+    const r = await tools.recall('word')
+    expect(r.isError).toBeUndefined()
+    expect(r.text.length).toBeLessThan(10_000)
+    expect(r.text).toContain('truncated')
+  })
+
+  test('read tools fire onSync so manifest seq state persists', async () => {
+    const { tools, synced } = rig()
+    await tools.save('memory/a.md', 'a\n')
+    const before = synced.length
+    await tools.recall('a')
+    await tools.search('a')
+    await tools.list()
+    await tools.configGet('a.json')
+    await tools.configGet()
+    await tools.grantList()
+    expect(synced.length).toBeGreaterThan(before)
   })
 
   test('delete requires a real key and removes exactly that entry', async () => {

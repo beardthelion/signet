@@ -33,13 +33,18 @@ export async function clientFromCustody(
   const secrets = await loadCustody()
   if (!secrets) return null
   const identity = identityFromPkcs8(Buffer.from(secrets.pkcs8, 'base64'))
+  // PASSPORT_PASSPHRASE overrides; otherwise the custody-held passphrase.
+  // A blank/whitespace value is treated as unset: '' is not a passphrase,
+  // and honoring it would derive keys from nothing.
+  const envPassphrase = process.env.PASSPORT_PASSPHRASE
+  const passphrase =
+    envPassphrase !== undefined && envPassphrase.trim() !== '' ? envPassphrase : secrets.passphrase
   const client = new PassportClient({
     url: process.env.PASSPORT_URL ?? DEFAULT_URL,
     identity,
     genesisDid: secrets.genesisDid,
     attestations: secrets.attestations,
-    // PASSPORT_PASSPHRASE overrides; otherwise the custody-held passphrase.
-    passphrase: process.env.PASSPORT_PASSPHRASE ?? secrets.passphrase,
+    passphrase,
     scanMode: scanModeFromEnv(),
     lastSeq: secrets.manifestSeqs[namespaceFor(secrets.genesisDid)] ?? 0,
     onScanWarning: opts.onScanWarning,

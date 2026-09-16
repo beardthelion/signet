@@ -169,12 +169,18 @@ export function generatePassphrase(): string {
 const EXPORT_NS = 'custody/export'
 const EXPORT_ENTRY_KEY = 'custody/export'
 
-/** The cleartext a bundle protects — the two secrets and the rotation chain. */
+/**
+ * The cleartext a bundle protects — the two secrets, the rotation chain, and
+ * the PS-041 anti-rollback floors. manifestSeqs must round-trip: without it
+ * the destination machine forgets the last verified seq and a replayed old
+ * manifest would pass the rollback check.
+ */
 type BundlePayload = {
   genesisDid: string
   passphrase: string
   pkcs8: string
   attestations: RotationAttestation[]
+  manifestSeqs: Record<string, number>
 }
 
 /**
@@ -188,6 +194,7 @@ export function exportBundle(secrets: CustodySecrets, exportPassphrase: string):
     passphrase: secrets.passphrase,
     pkcs8: secrets.pkcs8,
     attestations: secrets.attestations,
+    manifestSeqs: secrets.manifestSeqs,
   }
   const key = deriveKey(exportPassphrase, EXPORT_NS)
   const blob = encryptEntry(key, EXPORT_ENTRY_KEY, JSON.stringify(payload))

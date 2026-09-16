@@ -199,6 +199,15 @@ writeFileSync(
         Buffer.from(canonicalJson({ proof: 'did:key signs' })),
         genesis.priv,
       ).toString('base64'),
+      // The /auth/verify preimage is domain-separated: UTF-8 bytes of
+      // "passport-auth:" + nonce (SPEC §7.1). Pinned here so an
+      // implementation that signs the bare nonce drifts loudly.
+      authNonce: 'vector-auth-nonce-0001',
+      authSignature: sign(
+        null,
+        Buffer.from('passport-auth:vector-auth-nonce-0001', 'utf8'),
+        genesis.priv,
+      ).toString('base64'),
       publicKeyHex: genesis.rawPub.toString('hex'),
     },
     null,
@@ -215,10 +224,12 @@ writeFileSync(
   )}\n`,
 )
 
+// The manifest vector is a SignedManifest wire object ({manifest, did, sig})
+// exactly as identity/manifest.json carries it.
 writeFileSync(
   join(OUT, 'manifest.json'),
   `${JSON.stringify(
-    { specVersion: SPEC_VERSION, manifest, signature: manifestSig, signer: genesisDid },
+    { specVersion: SPEC_VERSION, manifest, did: genesisDid, sig: manifestSig },
     null,
     2,
   )}\n`,

@@ -72,7 +72,7 @@ function makeStub() {
     if (path === '/auth/verify' && method === 'POST') {
       const { did, nonce, sig } = body as { did: string; nonce: string; sig: string }
       if (!nonces.delete(nonce)) return apiError('invalid_nonce', 401)
-      if (!verifyDidSignature(did, new TextEncoder().encode(nonce), sig)) {
+      if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${nonce}`), sig)) {
         return apiError('invalid_signature', 401)
       }
       const token = `tok-${++counter}`

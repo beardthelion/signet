@@ -93,6 +93,14 @@ export function signB64(priv: KeyObject, message: string | Uint8Array): string {
   return sign(null, Buffer.from(message), priv).toString('base64')
 }
 
+/** The /auth/verify preimage prefix (SPEC §7.1): sigs cover "passport-auth:"+nonce. */
+export const AUTH_PREFIX = 'passport-auth:'
+
+/** Sign a challenge nonce for /auth/verify under the domain-separated preimage. */
+export function signNonceB64(priv: KeyObject, nonce: string): string {
+  return signB64(priv, `${AUTH_PREFIX}${nonce}`)
+}
+
 /**
  * Canonical JSON for building attestations — deliberately reimplemented here
  * rather than imported, so the test oracle stays independent of the code it
@@ -166,7 +174,7 @@ export async function tokenFor(
   return post('/auth/verify', {
     did: overrides?.did ?? id.did,
     nonce: overrides?.nonce ?? nonce,
-    sig: overrides?.sig ?? signB64(id.priv, overrides?.nonce ?? nonce),
+    sig: overrides?.sig ?? signNonceB64(id.priv, overrides?.nonce ?? nonce),
     ...(attestations ? { attestations } : {}),
   })
 }

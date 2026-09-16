@@ -12,6 +12,7 @@
  * The wire protocol (SPEC §7.1):
  *   POST /auth/challenge            → {nonce, expiresAt}
  *   POST /auth/verify {did, nonce, sig, attestations?} → {token, expiresAt}
+ *     (sig is Ed25519 over the UTF-8 bytes of "passport-auth:" + nonce)
  *   GET  /passport/<ns>             → manifest view (entry metadata)
  *   GET  /passport/<ns>?view=hashes → {entryKey: sha256-hash} for delta sync
  *   GET  /passport/<ns>?view=integrity → the signed identity/manifest.json blob
@@ -33,6 +34,7 @@
 import { EntryKey, type RotationAttestation, type Section, SignedManifest } from '../types/index.ts'
 import { ciphertextHash, decryptEntry, deriveKey, encryptEntry } from './crypto.ts'
 import {
+  AUTH_PREIMAGE_PREFIX,
   attestationHash,
   buildRotationAttestation,
   canonicalJson,
@@ -268,7 +270,10 @@ export class PassportClient {
     const body: Record<string, unknown> = {
       did: this.identity.did,
       nonce,
-      sig: signMessage(this.identity.privateKey, new TextEncoder().encode(nonce)),
+      // The preimage is domain-separated (SPEC §7.1): the same key signs
+      // attestations and manifests, so a server-chosen nonce must never be
+      // able to reproduce one of those signed documents.
+      sig: signMessage(this.identity.privateKey, `${AUTH_PREIMAGE_PREFIX}${nonce}`),
     }
     if (this.attestations.length) body.attestations = this.attestations
     const verified = await this.rawRequest(
@@ -303,10 +308,9 @@ export class PassportClient {
         body,
         signal: AbortSignal.timeout(this.timeoutMs),
       })
-      const raw = await res.text().catch((err: unknown) => {
-        if ((err as Error)?.name === 'TimeoutError') throw err
-        return ''
-      })
+      // A failed body read is a failed request, not an empty one — swallowing
+      // it would turn a broken response into a phantom "empty body" answer.
+      const raw = await res.text()
       return { ok: res.ok, status: res.status, statusText: res.statusText, raw }
     } catch (err) {
       if ((err as Error)?.name === 'TimeoutError') {
@@ -529,25 +533,40 @@ export class PassportClient {
     }
 
     const [hashes, remote] = await Promise.all([this.hashesView(), this.remoteManifest()])
-    const serverHashes = hashes ?? {}
     if (remote) this.adoptManifest(remote)
     const baseSeq = remote?.seq ?? 0
+
+    // The VERIFIED manifest is the only trusted map of what the store holds.
+    // The unsigned hashes view is a hint for the base precondition and delta
+    // detection; if its key set disagrees with the verified manifest the
+    // store is lying to one of the two views, and signing its version of the
+    // world into the next manifest would sign in entries the holder never
+    // wrote. Fail closed (PS-041).
+    const remoteEntries = remote?.signed.manifest.entries ?? {}
+    const viewKeys = Object.keys(hashes ?? {}).filter(k => k !== MANIFEST_ENTRY_KEY)
+    if (
+      viewKeys.length !== Object.keys(remoteEntries).length ||
+      viewKeys.some(k => !(k in remoteEntries))
+    ) {
+      throw new PassportIntegrityError(
+        'passport: the unsigned hashes view disagrees with the verified integrity manifest',
+      )
+    }
 
     const deletions = (opts?.deletions ?? []).filter(k => k !== MANIFEST_ENTRY_KEY)
     const deletionSet = new Set(deletions)
     const toUpload: Record<string, string> = {}
     const uploaded: string[] = []
     const unchanged: string[] = []
-    const nextHashes: Record<string, string> = {}
-    for (const [k, h] of Object.entries(serverHashes)) {
-      if (k !== MANIFEST_ENTRY_KEY) nextHashes[k] = h
-    }
+    // The next manifest's entry map starts from the verified manifest's
+    // entries — never from the unsigned view.
+    const nextHashes: Record<string, string> = { ...remoteEntries }
     for (const k of deletions) delete nextHashes[k]
 
     for (const [entryKey, plaintext] of Object.entries(userEntries)) {
       const b64 = encryptEntry(this.encKey, entryKey, plaintext)
       const hash = ciphertextHash(b64)
-      if (!deletionSet.has(entryKey) && serverHashes[entryKey] === hash) {
+      if (!deletionSet.has(entryKey) && remoteEntries[entryKey] === hash) {
         unchanged.push(entryKey)
         continue
       }
@@ -556,7 +575,7 @@ export class PassportClient {
       uploaded.push(entryKey)
     }
 
-    const changed = uploaded.length > 0 || deletions.some(k => serverHashes[k] !== undefined)
+    const changed = uploaded.length > 0 || deletions.some(k => remoteEntries[k] !== undefined)
     if (!changed) {
       return { namespace: this.namespace, seq: baseSeq, uploaded, unchanged, deleted: [] }
     }
@@ -583,10 +602,31 @@ export class PassportClient {
       deleted?: string[]
       skipped?: { key: string; reason: string }[]
     }
+    const skipped = result.skipped ?? []
+    if (skipped.length) {
+      // Entries the store refused must not stay named in the manifest this
+      // push just published, or every later pull would fetch-and-fail on
+      // blobs that never landed. Publish a corrected manifest over the
+      // entries that were actually accepted, then surface the refusal.
+      // lastSeq/lastManifestCanonical stay at the adopted remote state: the
+      // corrected manifest's bytes are not the ones this client signed
+      // optimistically, so the PS-041 same-seq pin must not record them.
+      const repaired: Record<string, string> = { ...nextHashes }
+      for (const s of skipped) delete repaired[s.key]
+      const fix = this.signManifest(repaired, seq)
+      const fixRes = await this.request('PUT', this.endpoint(), {
+        body: {
+          ...(typeof result.base === 'string' ? { base: result.base } : {}),
+          entries: {
+            [MANIFEST_ENTRY_KEY]: encryptEntry(this.encKey, MANIFEST_ENTRY_KEY, fix.plaintext),
+          },
+        },
+      })
+      if (!fixRes.ok) throw httpError(fixRes)
+      throw new PassportSkippedError(skipped, result.accepted ?? [])
+    }
     this.lastSeq = seq
     this.lastManifestCanonical = manifestCanonical
-    const skipped = result.skipped ?? []
-    if (skipped.length) throw new PassportSkippedError(skipped, result.accepted ?? [])
     return {
       namespace: this.namespace,
       seq,

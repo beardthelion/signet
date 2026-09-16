@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   DidKey,
   EntryKey,
@@ -7,6 +9,7 @@ import {
   isDeniedConfigKey,
   Namespace,
   RotationAttestation,
+  SignedManifest,
 } from '../src/types/index.ts'
 
 describe('Namespace', () => {
@@ -128,5 +131,20 @@ describe('identity documents', () => {
     expect(RotationAttestation.safeParse(r).success).toBe(true)
     r.prevHash = 'xyz'
     expect(RotationAttestation.safeParse(r).success).toBe(false)
+  })
+
+  test('the published manifest vector parses as a SignedManifest', () => {
+    // The vector must carry the same wire shape identity/manifest.json does:
+    // {manifest, did, sig}, not the older {manifest, signature, signer}.
+    const vector = JSON.parse(
+      readFileSync(join(import.meta.dir, '..', 'spec', 'vectors', 'manifest.json'), 'utf8'),
+    ) as unknown
+    const parsed = SignedManifest.safeParse(vector)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.did).toBe(parsed.data.manifest.genesisDid)
+      expect('signature' in (vector as object)).toBe(false)
+      expect('signer' in (vector as object)).toBe(false)
+    }
   })
 })

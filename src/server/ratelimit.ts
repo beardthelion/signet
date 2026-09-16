@@ -28,6 +28,13 @@ const REFILL_WINDOW_MS = perMinute > 0 ? CAP / REFILL_PER_MS : 0
 const IDLE_EVICT_MS = REFILL_WINDOW_MS * 3
 /** Sweep for idle buckets only once the map is large enough to matter. */
 const EVICT_THRESHOLD = 4096
+/**
+ * Hard ceiling on the bucket map. Idle eviction keeps the steady state
+ * small; this is the stop-loss for a flood of distinct keys inside one idle
+ * window — past it, NEW keys are refused rather than growing the map without
+ * bound. Known keys keep their buckets.
+ */
+const MAX_BUCKETS = 100_000
 
 type Bucket = { tokens: number; updatedAt: number }
 
@@ -51,6 +58,11 @@ export function take(key: string, now: number): RateResult {
 
   let b = buckets.get(key)
   if (!b) {
+    if (buckets.size >= MAX_BUCKETS) {
+      // Refusing a fresh key under map pressure must not throttle the keys
+      // already tracked; this new caller is simply told to slow down.
+      return { ok: false, retryAfterSec: 60 }
+    }
     b = { tokens: CAP, updatedAt: now }
     buckets.set(key, b)
   } else {

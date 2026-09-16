@@ -16,6 +16,9 @@ type S3Settings = {
   secretAccessKey: string
 }
 
+/** Bound on list() pagination — see list(). */
+const MAX_LIST_PAGES = 1000
+
 export class S3BlobStore implements BlobStore {
   readonly erasure = 'erases' as const
 
@@ -43,9 +46,14 @@ export class S3BlobStore implements BlobStore {
       const buf = await file.bytes()
       return new Uint8Array(buf)
     } catch (err) {
-      // Bun throws on a missing object; treat "not found" as null.
-      const msg = (err as Error).message ?? ''
-      if (/not.?found|NoSuchKey|404/i.test(msg)) return null
+      // Bun throws on a missing object; treat "not found" as null. Classify
+      // on the structured code/status the S3 error carries, not the message
+      // text — message wording is not an API contract.
+      const e = err as { code?: string; name?: string; status?: number } & Error
+      const status = e?.status ?? (e as { $status?: number }).$status
+      if (e?.code === 'NoSuchKey' || e?.name === 'NoSuchKey' || status === 404) {
+        return null
+      }
       // exists() is cheap and unambiguous for the genuinely-missing case.
       if (!(await file.exists().catch(() => true))) return null
       throw err
@@ -63,12 +71,16 @@ export class S3BlobStore implements BlobStore {
   async list(prefix: string): Promise<string[]> {
     const out: string[] = []
     let token: string | undefined
-    do {
+    // Pagination is bounded: a bucket that never stops truncating is a
+    // backend fault, not a reason to page forever (1000 pages at up to 1000
+    // keys each still covers a million objects).
+    for (let pages = 0; pages < MAX_LIST_PAGES; pages++) {
       const page = await this.client.list({ prefix, continuationToken: token })
       for (const o of page.contents ?? []) if (o.key) out.push(o.key)
       token = page.isTruncated ? page.nextContinuationToken : undefined
-    } while (token)
-    return out
+      if (!token) return out
+    }
+    throw new Error(`s3 list under prefix "${prefix}" exceeded ${MAX_LIST_PAGES} pages`)
   }
 
   describe(): string {

@@ -153,7 +153,7 @@ function makeStub() {
         attestations?: RotationAttestation[]
       }
       if (!nonces.delete(nonce)) return apiError('invalid_nonce', 401)
-      if (!verifyDidSignature(did, new TextEncoder().encode(nonce), sig)) {
+      if (!verifyDidSignature(did, new TextEncoder().encode(`passport-auth:${nonce}`), sig)) {
         return apiError('invalid_signature', 401)
       }
       if (attestations !== undefined) {
@@ -461,6 +461,22 @@ describe('integrity — fail closed (PS-041)', () => {
     })
     await expect(wrong.pull()).rejects.toThrow(PassportDecryptError)
   })
+
+  test('a push fails closed when the unsigned hashes view disagrees with the signed manifest', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const ns = namespaceFor(id.did)
+    const client = clientFor(stub, id)
+    await client.push({ 'memory/a.md': 'v1\n' })
+    // The store plants a key in its unsigned view that the signed manifest
+    // never named — the client must refuse to sign that view into the next
+    // manifest rather than adopt it.
+    stub.manifests.get(ns)!.set('memory/planted.md', { hash: `sha256:${'0'.repeat(64)}`, size: 1 })
+    await expect(client.push({ 'memory/b.md': 'v2\n' })).rejects.toThrow(PassportIntegrityError)
+    // The verified manifest is untouched; pull still works.
+    const out = await client.pull()
+    expect(out.entries['memory/a.md']).toBe('v1\n')
+  })
 })
 
 describe('wire failures surface honestly', () => {
@@ -479,6 +495,16 @@ describe('wire failures surface honestly', () => {
       ])
       expect((err as PassportSkippedError).accepted).toContain('memory/ok.md')
     }
+    // The refusal must not leave the client's seq state pinned to a manifest
+    // that was never published: the next pull verifies the corrected
+    // manifest and adopts it cleanly.
+    const out = await client.pull()
+    expect(out.entries['memory/ok.md']).toBe('fine\n')
+    expect(out.entries['memory/big.md']).toBeUndefined()
+    const manifest = JSON.parse(out.entries[MANIFEST_ENTRY_KEY]!) as {
+      manifest: { entries: Record<string, string> }
+    }
+    expect('memory/big.md' in manifest.manifest.entries).toBe(false)
   })
 
   test('a stale base surfaces as a 409 error with the current base', async () => {
@@ -577,6 +603,8 @@ describe('custody export/import (PS-102)', () => {
     expect(restored.genesisDid).toBe(id.did)
     expect(restored.passphrase).toBe(PASS)
     expect(identityFromPkcs8(Buffer.from(restored.pkcs8, 'base64')).did).toBe(id.did)
+    // The PS-041 anti-rollback floor must cross machines with the secrets.
+    expect(restored.manifestSeqs).toEqual({ [namespaceFor(id.did)]: 3 })
 
     expect(() => importBundle(bundle, 'wrong pass')).toThrow()
     expect(() => importBundle('{not json', 'export pass')).toThrow()

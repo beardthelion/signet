@@ -13,6 +13,7 @@ import {
   SecretFoundError,
   scanEntries,
   scanEntry,
+  scanModeFromEnv,
 } from '../src/client/secretscan.ts'
 
 const scan = (text: string, key = 'memory/note.md'): Finding[] => scanEntry(key, text)
@@ -32,6 +33,8 @@ describe('credential shapes are blocked', () => {
     ['bearer token', 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9abc'],
     ['jwt', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.somesignaturevalue'],
     ['quoted password', 'password = "correct-horse-battery"'],
+    ['quoted passphrase', 'passphrase = "correct horse battery staple"'],
+    ['unquoted passphrase', 'passphrase: a1b2c3d4e5f6a7b8c9d0e1f2'],
     ['quoted api key', "api_key: 'abcdef0123456789'"],
     ['unquoted high-entropy token', 'token = a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'],
   ]
@@ -97,5 +100,17 @@ describe('enforce policy', () => {
     })
     expect(findings.length).toBeGreaterThan(0)
     expect(findings[0]!.entryKey).toBe('sessions/s/000001')
+  })
+})
+
+describe('scanModeFromEnv', () => {
+  test('accepts the three modes and defaults to block', () => {
+    expect(scanModeFromEnv(undefined)).toBe('block')
+    for (const m of ['block', 'warn', 'off'] as const) expect(scanModeFromEnv(m)).toBe(m)
+  })
+
+  test('an invalid value throws rather than degrading silently', () => {
+    expect(() => scanModeFromEnv('strictest')).toThrow(/invalid PASSPORT_SCAN/)
+    expect(() => scanModeFromEnv('')).toThrow(/invalid PASSPORT_SCAN/)
   })
 })

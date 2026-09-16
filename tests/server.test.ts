@@ -293,4 +293,26 @@ describe('protocol edges', () => {
     expect(res.status).toBe(400)
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('invalid_namespace')
   })
+
+  test('malformed percent-encoding under /passport/ is 400, not 404', async () => {
+    const token = await mustToken(id)
+    for (const suffix of [
+      '/passport/%E0%A4%A',
+      `${nsPath(id.namespace)}/memory/%zz`,
+      '/passport/%',
+    ]) {
+      const res = await authed(token, 'GET', suffix)
+      expect(res.status).toBe(400)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('bad_request')
+    }
+  })
+
+  test('a non-base64 entry body is skipped with invalid_base64', async () => {
+    const token = await mustToken(id)
+    const r = await putOk(token, id.namespace, {
+      entries: { 'memory/ok.md': b64('fine'), 'memory/bad.md': '!!!not-base64!!!' },
+    })
+    expect(r.accepted).toEqual(['memory/ok.md'])
+    expect(r.skipped).toEqual([{ key: 'memory/bad.md', reason: 'invalid_base64' }])
+  })
 })

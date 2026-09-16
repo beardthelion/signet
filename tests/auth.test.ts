@@ -20,7 +20,7 @@ import {
   mustToken,
   nsPath,
   post,
-  signB64,
+  signNonceB64,
   tokenFor,
 } from './setup.ts'
 
@@ -49,24 +49,45 @@ describe('challenge/verify', () => {
 
   test('a replayed nonce is rejected (single-use)', async () => {
     const { nonce } = await challenge()
-    const sig = signB64(id.priv, nonce)
+    const sig = signNonceB64(id.priv, nonce)
     const first = await verifyRaw(id.did, nonce, sig)
     expect(first.status).toBe(200)
     // The SAME nonce a second time — even with a fresh valid signature.
-    const replay = await verifyRaw(id.did, nonce, signB64(id.priv, nonce))
+    const replay = await verifyRaw(id.did, nonce, signNonceB64(id.priv, nonce))
     expect(replay.status).toBe(401)
     expect(((await replay.json()) as { error: { code: string } }).error.code).toBe('invalid_nonce')
   })
 
+  test('an expired nonce is consumed and rejected', async () => {
+    const { consumeNonce, issueChallenge } = await import('../src/server/auth.ts')
+    const t0 = Date.now()
+    const issued = issueChallenge(t0)
+    expect(issued).not.toBeNull()
+    // Past the 120 s TTL the nonce must not verify, and consuming it removes
+    // it either way — it cannot come back.
+    expect(consumeNonce(issued!.nonce, t0 + 121_000)).toBe(false)
+    expect(consumeNonce(issued!.nonce, t0)).toBe(false)
+  })
+
   test('an unknown nonce is rejected', async () => {
-    const res = await verifyRaw(id.did, 'never-issued', signB64(id.priv, 'never-issued'))
+    const res = await verifyRaw(id.did, 'never-issued', signNonceB64(id.priv, 'never-issued'))
     expect(res.status).toBe(401)
+  })
+
+  test('a signature over the bare nonce (no domain prefix) is rejected', async () => {
+    // Pre-domain-separation signing must fail: the preimage is the UTF-8
+    // bytes of "passport-auth:" + nonce, nothing else.
+    const { signB64 } = await import('./setup.ts')
+    const { nonce } = await challenge()
+    const res = await verifyRaw(id.did, nonce, signB64(id.priv, nonce))
+    expect(res.status).toBe(401)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('invalid_signature')
   })
 
   test('a signature by another key is rejected', async () => {
     const other = identity('auth-other')
     const { nonce } = await challenge()
-    const res = await verifyRaw(id.did, nonce, signB64(other.priv, nonce))
+    const res = await verifyRaw(id.did, nonce, signNonceB64(other.priv, nonce))
     expect(res.status).toBe(401)
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('invalid_signature')
   })
@@ -80,7 +101,7 @@ describe('challenge/verify', () => {
   test('a did:key string that is not an Ed25519 key cannot verify', async () => {
     const { nonce } = await challenge()
     // Grammar-valid did:key, garbage payload — no key to verify against.
-    const res = await verifyRaw('did:key:z6Mk', nonce, signB64(id.priv, nonce))
+    const res = await verifyRaw('did:key:z6Mk', nonce, signNonceB64(id.priv, nonce))
     expect(res.status).toBe(401)
   })
 })
@@ -231,5 +252,83 @@ describe('rotation attestation chains (PS-051/PS-052)', () => {
     // And the same document with the signature field stripped must fail.
     const unsigned = { ...(vector.attestation as object), sig: 'AAAA' } as unknown
     expect(verifyAttestationChain(vector.genesisDid, [unsigned])).toBe(null)
+  })
+
+  test('an oversized attestation chain is refused before per-element work', async () => {
+    const { MAX_ATTESTATION_CHAIN } = await import('../src/server/auth.ts')
+    // The cap is enforced on the array length alone: junk elements under a
+    // valid count still fail, and a valid-looking chain over the cap never
+    // reaches parsing.
+    expect(verifyAttestationChain(genesis.did, new Array(MAX_ATTESTATION_CHAIN + 1).fill({}))).toBe(
+      null,
+    )
+    const g = identity('rot-cap-genesis')
+    const s = identity('rot-cap-successor')
+    const { nonce } = await challenge()
+    const res = await post('/auth/verify', {
+      did: s.did,
+      nonce,
+      sig: signNonceB64(s.priv, nonce),
+      attestations: new Array(MAX_ATTESTATION_CHAIN + 1).fill(
+        makeAttestation(g, g.priv, s, 1, ZERO),
+      ),
+    })
+    expect(res.status).toBe(401)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      'invalid_attestation',
+    )
+  })
+
+  test('malformed attestation inputs fail with 400 or 401, never 500', async () => {
+    const s = identity('rot-malformed-successor')
+    const post_verify = async (attestations: unknown) => {
+      const { nonce } = await challenge()
+      return post('/auth/verify', {
+        did: s.did,
+        nonce,
+        sig: signNonceB64(s.priv, nonce),
+        attestations,
+      })
+    }
+    // Non-array -> 400; array carrying non-attestation elements -> 401.
+    expect((await post_verify('not-an-array')).status).toBe(400)
+    expect((await post_verify([])).status).toBe(400)
+    expect((await post_verify([{ bogus: true }])).status).toBe(401)
+    expect((await post_verify(['a string is not an attestation'])).status).toBe(401)
+  })
+
+  test('a rotated-out genesis key loses authorization', async () => {
+    const g = identity('rot-revoke-genesis')
+    const s = identity('rot-revoke-successor')
+    const a = makeAttestation(g, g.priv, s, 1, ZERO)
+    // Present + persist the chain, then the genesis DID itself must be 403.
+    expect((await tokenFor(s, [a])).status).toBe(200)
+    const genesisToken = await mustToken(g)
+    const res = await authed(genesisToken, 'GET', nsPath(g.namespace))
+    expect(res.status).toBe(403)
+  })
+
+  test('a corrupt stored chain authorizes nobody and cannot be out-bid', async () => {
+    const g = identity('rot-corrupt-genesis')
+    const s = identity('rot-corrupt-successor')
+    const { getStore, attestationsPath } = await import('../src/server/store/blob.ts')
+    const { namespaceSlug } = await import('../src/server/namespace.ts')
+    const slug = namespaceSlug(g.namespace)
+    // A blob that is not even a JSON array: the store cannot be measured, so
+    // it must never be treated as absent or replaced by a presented chain.
+    await getStore().put(attestationsPath(slug), new TextEncoder().encode('{{{{corrupt'))
+    // Genesis is no longer authorized: a chain exists but cannot be verified.
+    const genesisToken = await mustToken(g)
+    expect((await authed(genesisToken, 'GET', nsPath(g.namespace))).status).toBe(403)
+    // A valid presented chain verifies at /auth/verify but must NOT overwrite
+    // the corrupt stored blob, so authorization stays closed.
+    const a = makeAttestation(g, g.priv, s, 1, ZERO)
+    expect((await tokenFor(s, [a])).status).toBe(200)
+    const successorToken = await mustToken(s)
+    expect((await authed(successorToken, 'GET', nsPath(g.namespace))).status).toBe(403)
+    // The corrupt blob survived.
+    const raw = await getStore().get(attestationsPath(slug))
+    expect(new TextDecoder().decode(raw!)).toBe('{{{{corrupt')
+    await getStore().delete(attestationsPath(slug))
   })
 })

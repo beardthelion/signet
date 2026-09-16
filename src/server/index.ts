@@ -24,7 +24,11 @@ import { caps } from './quota.ts'
 import { getStore } from './store/blob.ts'
 
 function isLoopback(host: string): boolean {
-  return host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.')
+  if (host === 'localhost' || host === '::1' || host === '[::1]') return true
+  // Only a numeric 127.x.y.z literal — a prefix test would admit names like
+  // "127.evil.com" that resolve anywhere.
+  if (!/^127(\.\d{1,3}){3}$/.test(host)) return false
+  return host.split('.').every(octet => Number(octet) <= 255)
 }
 
 const mode = (process.env.PASSPORT_MODE ?? 'local').trim().toLowerCase()

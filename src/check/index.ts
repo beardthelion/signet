@@ -25,7 +25,12 @@ import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassportClient } from '../client/client.ts'
-import { generateIdentity, type Identity, signMessage } from '../client/identity.ts'
+import {
+  AUTH_PREIMAGE_PREFIX,
+  generateIdentity,
+  type Identity,
+  signMessage,
+} from '../client/identity.ts'
 import { CHECK_PASSPHRASE, checks } from './clauses.ts'
 import {
   buildReport,
@@ -33,6 +38,9 @@ import {
   type ConformanceReport,
   type ReportResult,
 } from './report.ts'
+import { cleanupTmpDirs, trackTmpDir } from './tmpdirs.ts'
+
+export { trackTmpDir }
 
 // ─── Target model ───────────────────────────────────────────────────────
 
@@ -105,6 +113,11 @@ export function loadRegistry(): ClauseRegistry {
 
 // ─── Context implementation ─────────────────────────────────────────────
 
+/** Per-request budget on the wire; a hung target must not freeze the run. */
+const WIRE_TIMEOUT_MS = 30_000
+/** Per-check deadline; a check that outlives it is recorded as a fail. */
+const CHECK_DEADLINE_MS = 120_000
+
 function makeContext(target: CheckTarget, specVersion: string): CheckContext {
   const wire: CheckContext['wire'] = (method, path, opts) => {
     const headers: Record<string, string> = {}
@@ -114,6 +127,7 @@ function makeContext(target: CheckTarget, specVersion: string): CheckContext {
       new Request(`${target.url}${path}`, {
         method,
         headers,
+        signal: AbortSignal.timeout(WIRE_TIMEOUT_MS),
         ...(opts?.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
       }),
     )
@@ -137,7 +151,7 @@ function makeContext(target: CheckTarget, specVersion: string): CheckContext {
       body: {
         did: identity.did,
         nonce,
-        sig: signMessage(identity.privateKey, new TextEncoder().encode(nonce)),
+        sig: signMessage(identity.privateKey, `${AUTH_PREIMAGE_PREFIX}${nonce}`),
         ...(attestations ? { attestations } : {}),
       },
     })
@@ -195,30 +209,53 @@ export async function runCheck(target: CheckTarget): Promise<ConformanceReport> 
   const registry = loadRegistry()
   const ctx = makeContext(target, registry.specVersion)
   const results: ReportResult[] = []
-  for (const clause of registry.clauses) {
-    const fn = (checks as Record<string, CheckFn>)[clause.check]
-    if (!fn) {
+  try {
+    for (const clause of registry.clauses) {
+      const fn = (checks as Record<string, CheckFn>)[clause.check]
+      if (!fn) {
+        results.push({
+          clause: clause.id,
+          status: 'unsupported',
+          detail: `no checker function registered as ${clause.check}`,
+        })
+        continue
+      }
+      let r: ClauseResult
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        // A target that hangs a check must not freeze the report: the check
+        // races a deadline and loses.
+        r = await Promise.race([
+          fn(ctx),
+          new Promise<ClauseResult>(resolve => {
+            timer = setTimeout(
+              () =>
+                resolve({
+                  status: 'fail',
+                  detail: `check exceeded the ${CHECK_DEADLINE_MS}ms deadline`,
+                }),
+              CHECK_DEADLINE_MS,
+            )
+          }),
+        ])
+      } catch (err) {
+        r = {
+          status: 'fail',
+          detail: `check threw: ${(err as Error)?.message ?? String(err)}`,
+        }
+      } finally {
+        clearTimeout(timer)
+      }
       results.push({
         clause: clause.id,
-        status: 'unsupported',
-        detail: `no checker function registered as ${clause.check}`,
+        status: r.status,
+        ...(r.detail ? { detail: sanitizeDetail(r.detail) } : {}),
       })
-      continue
     }
-    let r: ClauseResult
-    try {
-      r = await fn(ctx)
-    } catch (err) {
-      r = {
-        status: 'fail',
-        detail: `check threw: ${(err as Error)?.message ?? String(err)}`,
-      }
-    }
-    results.push({
-      clause: clause.id,
-      status: r.status,
-      ...(r.detail ? { detail: sanitizeDetail(r.detail) } : {}),
-    })
+  } finally {
+    // Temp dirs the harness created (store roots, custody dirs) are run
+    // scratch, not artifacts; remove them once the checks are done.
+    cleanupTmpDirs()
   }
   return buildReport(registry.specVersion, target.name, results)
 }
@@ -284,7 +321,7 @@ async function spawnServer(env: Record<string, string>, waitMs: number): Promise
     env: {
       ...process.env,
       STORE: 'fs',
-      PASSPORT_DATA_DIR: mkdtempSync(join(tmpdir(), 'passport-check-serve-')),
+      PASSPORT_DATA_DIR: trackTmpDir(mkdtempSync(join(tmpdir(), 'passport-check-serve-'))),
       ...env,
     },
     stdout: 'pipe',
@@ -385,11 +422,14 @@ export async function localTarget(opts?: {
   name?: string
   dataDir?: string
 }): Promise<CheckTarget> {
-  const dataDir = opts?.dataDir ?? mkdtempSync(join(tmpdir(), 'passport-check-'))
+  // Isolation is the default: without an explicit dataDir the checker gets a
+  // fresh mkdtemp store, and the ambient PASSPORT_DATA_DIR is never honored.
+  // Callers that want a specific store pass it in.
+  const dataDir = opts?.dataDir ?? trackTmpDir(mkdtempSync(join(tmpdir(), 'passport-check-')))
   process.env.STORE ??= 'fs'
-  process.env.PASSPORT_DATA_DIR ??= dataDir
+  process.env.PASSPORT_DATA_DIR = dataDir
   process.env.PASSPORT_MODE ??= 'local'
-  const storeDir = process.env.PASSPORT_DATA_DIR
+  const storeDir = dataDir
   const { handleRequest } = await import('../server/handler.ts')
   const { setStore } = await import('../server/store/blob.ts')
   const { FsBlobStore } = await import('../server/store/fs.ts')
@@ -410,13 +450,20 @@ export async function localTarget(opts?: {
 }
 
 /** A live store over a socket. Store internals and startup policy are
- *  unreachable here; the affected clauses report unsupported. */
+ *  unreachable here; the affected clauses report unsupported. Every fetch
+ *  carries a timeout so a hung target cannot freeze the run. */
 export function httpTarget(url: string, name?: string): CheckTarget {
   const base = url.replace(/\/$/, '')
+  // Honor a caller-supplied signal (wire() sets its own); add one otherwise.
+  const timedFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+    fetch(input, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(WIRE_TIMEOUT_MS),
+    })) as typeof fetch
   return {
     name: name ?? base,
     url: base,
-    fetch: req => fetch(req),
-    clientFetch: fetch,
+    fetch: req => (req.signal ? fetch(req) : timedFetch(req)),
+    clientFetch: timedFetch,
   }
 }

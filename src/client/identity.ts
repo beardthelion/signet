@@ -178,6 +178,15 @@ export function canonicalJson(value: unknown): string {
   return `{${entries.join(',')}}`
 }
 
+/**
+ * Domain-separation prefix for /auth/verify signatures (SPEC §7.1). The same
+ * Ed25519 key signs rotation attestations and integrity manifests, so the
+ * challenge preimage is the UTF-8 bytes of `passport-auth:` + nonce — a
+ * server-chosen nonce can then never collide with a document this key would
+ * sign for another purpose.
+ */
+export const AUTH_PREIMAGE_PREFIX = 'passport-auth:'
+
 /** Ed25519-sign a message (string = UTF-8 bytes), base64 result. */
 export function signMessage(privateKey: KeyObject, message: string | Uint8Array): string {
   return nodeSign(null, Buffer.from(message), privateKey).toString('base64')

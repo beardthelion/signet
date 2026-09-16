@@ -221,7 +221,13 @@ export function makeStubTarget(faults: StubFaults = {}, name = 'stub'): CheckTar
       if (!faults.skipAuth) {
         // The fault skips both the single-use nonce and the signature check.
         if (!nonces.delete(body.nonce)) return apiError('invalid_nonce', 401)
-        if (!verifyDidSignature(body.did, new TextEncoder().encode(body.nonce), body.sig)) {
+        if (
+          !verifyDidSignature(
+            body.did,
+            new TextEncoder().encode(`passport-auth:${body.nonce}`),
+            body.sig,
+          )
+        ) {
           return apiError('invalid_signature', 401)
         }
       }

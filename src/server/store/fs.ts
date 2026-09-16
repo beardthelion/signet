@@ -49,8 +49,14 @@ export class FsBlobStore implements BlobStore {
       dirname(dest),
       `.tmp-${process.pid}-${randomUUID()}-${bytes.byteLength}-${path.length}`,
     )
-    await writeFile(tmp, bytes)
-    await rename(tmp, dest)
+    try {
+      await writeFile(tmp, bytes)
+      await rename(tmp, dest)
+    } finally {
+      // A failed write or rename must not leak the temp file into the data
+      // dir; after a successful rename this is a harmless no-op.
+      await rm(tmp, { force: true }).catch(() => {})
+    }
   }
 
   async delete(path: string): Promise<void> {

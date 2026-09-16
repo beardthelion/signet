@@ -28,7 +28,7 @@
  * (PS-103) — there is no recovery path, and init says so.
  */
 
-import { chmodSync } from 'node:fs'
+import { chmodSync, renameSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -145,7 +145,11 @@ async function cmdInit(force: boolean): Promise<void> {
     )
   }
   const identity = generateIdentity()
-  const passphrase = process.env.PASSPORT_PASSPHRASE ?? generatePassphrase()
+  // A blank/whitespace PASSPORT_PASSPHRASE is unset, not a passphrase: ''
+  // fails custody's min(1) and would derive keys from an empty secret.
+  const envPassphrase = process.env.PASSPORT_PASSPHRASE
+  const fromEnv = envPassphrase !== undefined && envPassphrase.trim() !== ''
+  const passphrase = fromEnv ? envPassphrase : generatePassphrase()
   const secrets: CustodySecrets = {
     version: 1,
     genesisDid: identity.did,
@@ -175,7 +179,7 @@ async function cmdInit(force: boolean): Promise<void> {
   console.log(`genesis DID: ${identity.did}`)
   console.log(`namespace:   ${namespaceFor(identity.did)}`)
   console.log(`custody:     ${backend.describe()} (0600)`)
-  if (!process.env.PASSPORT_PASSPHRASE) {
+  if (!fromEnv) {
     console.log(`passphrase (shown once — back it up now):\n\n  ${passphrase}\n`)
   }
   console.log('Key loss is total loss (PS-103): there is no recovery path.')
@@ -221,8 +225,13 @@ async function cmdExport(file: string): Promise<void> {
   const secrets = await loadCustody()
   if (!secrets) throw new Error('no custody found — nothing to export')
   const pass = await exportPassphrase(true)
-  await writeFile(file, exportBundle(secrets, pass), { mode: 0o600 })
-  chmodSync(file, 0o600)
+  // Same discipline as the custody file: write a 0600 tmp, re-assert the
+  // mode, then rename so a crash never leaves a half-written or
+  // briefly-world-readable secrets bundle.
+  const tmp = `${file}.tmp`
+  await writeFile(tmp, exportBundle(secrets, pass), { mode: 0o600 })
+  chmodSync(tmp, 0o600)
+  renameSync(tmp, file)
   console.log(`wrote encrypted custody bundle to ${file}`)
 }
 

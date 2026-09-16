@@ -45,6 +45,7 @@ import {
   importBundle,
 } from '../client/custody.ts'
 import {
+  AUTH_PREIMAGE_PREFIX,
   attestationHash,
   base58btc,
   buildRotationAttestation,
@@ -69,6 +70,11 @@ import {
 } from '../types/index.ts'
 import type { CheckContext, CheckFn, Session } from './index.ts'
 import type { ClauseResult } from './report.ts'
+import { trackTmpDir } from './tmpdirs.ts'
+
+/** The auth nonce signature: domain-separated preimage per SPEC §7.1. */
+const signNonce = (key: Parameters<typeof signMessage>[0], nonce: string) =>
+  signMessage(key, `${AUTH_PREIMAGE_PREFIX}${nonce}`)
 
 /**
  * The passphrase every checker-provisioned passport uses. Constant on
@@ -653,7 +659,8 @@ const checkManifestRollback: CheckFn = async ctx => {
   const problems: string[] = []
   const s = await ctx.provision()
   await s.client.push({ 'memory/m.md': 'v1\n' })
-  await s.client.push({ 'memory/m.md': 'v2\n' }) // manifest seq is now 2
+  // init + two pushes: the verified manifest seq is now 3.
+  await s.client.push({ 'memory/m.md': 'v2\n' })
   const encKey = deriveKey(CHECK_PASSPHRASE, s.namespace)
   const attacker = generateIdentity()
 
@@ -697,10 +704,12 @@ const checkManifestRollback: CheckFn = async ctx => {
     }),
   )
   await expectRejection('rolled-back manifest')
-  // Replaced at the same seq: valid signature, different bytes.
+  // Replaced at the same seq: valid signature, different bytes. The seq
+  // must equal the client's verified manifestSeq or this probes rollback,
+  // not the same-seq byte-identity rule.
   await inject(
     signAs(s.identity, {
-      seq: 2,
+      seq: s.client.manifestSeq,
       specVersion: ctx.specVersion,
       genesisDid: s.identity.did,
       entries: {},
@@ -813,7 +822,7 @@ const checkAttestationChain: CheckFn = async ctx => {
     const status = await ctx.tryVerify({
       did: stranger.did,
       nonce,
-      sig: signMessage(stranger.privateKey, new TextEncoder().encode(nonce)),
+      sig: signNonce(stranger.privateKey, nonce),
       attestations: [att],
     })
     if (status !== 401)
@@ -851,7 +860,7 @@ const checkSuccessorAuth: CheckFn = async ctx => {
   const forgedStatus = await ctx.tryVerify({
     did: attacker.did,
     nonce: forgedNonce,
-    sig: signMessage(attacker.privateKey, new TextEncoder().encode(forgedNonce)),
+    sig: signNonce(attacker.privateKey, forgedNonce),
     attestations: [forged],
   })
   if (forgedStatus !== 401) {
@@ -871,7 +880,11 @@ const checkSuccessorAuth: CheckFn = async ctx => {
   // The longer chain is only persisted when the new terminal presents it at
   // /auth/verify; until then the stored chain still ends at s1.
   const terminal = await ctx.tokenFor(r2.successor, r2.chain).catch(() => null)
-  if (terminal !== null) {
+  if (terminal === null) {
+    // A rejected verify here is a conformance problem, not a skipped probe:
+    // the terminal DID of a strictly longer valid chain must authenticate.
+    problems.push('the terminal successor could not authenticate with the extended chain')
+  } else {
     const res = await ctx.wire('GET', nsPath(s.namespace), { token: terminal })
     if (res.status !== 200) problems.push('the terminal successor lost access to the passport')
   }
@@ -1208,7 +1221,7 @@ const checkAuth: CheckFn = async ctx => {
 
   // Replay: a consumed nonce must never verify again.
   const nonce = await ctx.challenge()
-  const sig = signMessage(id.privateKey, new TextEncoder().encode(nonce))
+  const sig = signNonce(id.privateKey, nonce)
   const first = await ctx.tryVerify({ did: id.did, nonce, sig })
   if (first !== 200) problems.push('a valid challenge/verify was refused')
   const replay = await ctx.tryVerify({ did: id.did, nonce, sig })
@@ -1216,7 +1229,7 @@ const checkAuth: CheckFn = async ctx => {
 
   // Bad signature and unknown nonce are both refused.
   const badNonce = await ctx.challenge()
-  const wrongSig = signMessage(other.privateKey, new TextEncoder().encode(badNonce))
+  const wrongSig = signNonce(other.privateKey, badNonce)
   if ((await ctx.tryVerify({ did: id.did, nonce: badNonce, sig: wrongSig })) !== 401) {
     problems.push('a signature from the wrong key was accepted')
   }
@@ -1283,7 +1296,7 @@ const checkCustody: CheckFn = async ctx => {
  *  committable path. */
 const checkInitCustody: CheckFn = async () => {
   const problems: string[] = []
-  const dir = mkdtempSync(join(tmpdir(), 'passport-check-custody-'))
+  const dir = trackTmpDir(mkdtempSync(join(tmpdir(), 'passport-check-custody-')))
   const backend = new FileCustodyBackend(dir)
   const id = generateIdentity()
   const secrets: CustodySecrets = {
@@ -1443,6 +1456,8 @@ const checkCliVectors: CheckFn = async () => {
     namespace: string
     signMessage: string
     signature: string
+    authNonce: string
+    authSignature: string
     publicKeyHex: string
   }
   const genesis = identityFromSeed(Buffer.from(identity.genesisSeedHex, 'hex'))
@@ -1457,6 +1472,17 @@ const checkCliVectors: CheckFn = async () => {
   }
   if (!verifyDidSignature(identity.genesisDid, identity.signMessage, identity.signature)) {
     problems.push('identity vector signature does not verify')
+  }
+  // The pinned auth signature must cover the domain-separated preimage;
+  // a signature over the bare nonce is a different (rejected) contract.
+  if (
+    !verifyDidSignature(
+      identity.genesisDid,
+      new TextEncoder().encode(`${AUTH_PREIMAGE_PREFIX}${identity.authNonce}`),
+      identity.authSignature,
+    )
+  ) {
+    problems.push('identity vector auth signature does not verify over the prefixed preimage')
   }
   if (namespaceFor(identity.genesisDid) !== identity.namespace) {
     problems.push('identity vector namespace mismatch')
@@ -1478,13 +1504,16 @@ const checkCliVectors: CheckFn = async () => {
     }
   }
 
-  const manifest = loadVector('manifest.json') as {
-    manifest: unknown
-    signature: string
-    signer: string
-  }
-  if (!verifyDidSignature(manifest.signer, canonicalJson(manifest.manifest), manifest.signature)) {
-    problems.push('manifest vector signature does not verify')
+  // The manifest vector must be a SignedManifest wire object
+  // ({manifest, did, sig}) — the same shape identity/manifest.json carries.
+  const manifestVector = SignedManifest.safeParse(loadVector('manifest.json'))
+  if (!manifestVector.success) {
+    problems.push('manifest vector does not parse as a SignedManifest')
+  } else {
+    const { manifest, did, sig } = manifestVector.data
+    if (!verifyDidSignature(did, canonicalJson(manifest), sig)) {
+      problems.push('manifest vector signature does not verify')
+    }
   }
   return verdict(problems)
 }

@@ -67,11 +67,15 @@ total loss by design; there is no recovery path in this version.
   attestation's canonical JSON (`"0"*64` for `seq=1`), and `sig` is the
   genesis-or-predecessor key's Ed25519 signature over the canonical JSON of
   `{genesisDid, newDid, seq, prevHash}`. The new key's signature is NOT
-  required: control of the old key is the whole authorization.
-- **PS-052.** A server MUST authorize a request key only if it is the genesis
-  DID key, or it terminates a chain of valid attestations rooted at the genesis
-  DID with correct `seq` ordering and `prevHash` linkage. Forged, unsigned,
-  misordered, or mis-linked attestations MUST be rejected.
+  required: control of the old key is the whole authorization. A chain longer
+  than 64 attestations MUST be rejected.
+- **PS-052.** While no rotation chain is stored for a namespace, a server MUST
+  authorize only the genesis DID key. Once a valid chain is stored, a server
+  MUST authorize only its terminal DID: every earlier key, the genesis key
+  included, loses authority. A rotated-out key MUST NOT remain authorized.
+  Forged, unsigned, misordered, or mis-linked attestations MUST be rejected,
+  and a stored chain that fails re-verification authorizes no key. A stored
+  chain MUST NOT be replaced by a presented chain that is not strictly longer.
 - **PS-053.** After rotation the namespace, entry data, and caps remain bound
   to the genesis DID. A successor key MUST NOT be able to open a namespace
   under its own DID.
@@ -97,14 +101,14 @@ total loss by design; there is no recovery path in this version.
 - **PS-020.** An entry key is a POSIX-ish relative path
   `<section>/<path>` where `<section>` is one of `memory`, `config`,
   `sessions`, `grants`, `identity`, and each path segment matches
-  `[A-Za-z0-9][A-Za-z0-9._-]*`.
+  `[A-Za-z0-9][A-Za-z0-9._-]*`. An entry key is at most 255 characters.
 - **PS-021.** Keys MUST NOT contain `..`, `//`, a leading or trailing `/`,
   backslash, or NUL. Both client and server MUST reject such keys before any
   storage access.
 - **PS-022.** Session transcripts are chunked as `sessions/<id>/<seq>` where
-  `<id>` is a valid segment and `<seq>` is a zero-padded sequence counter.
-  Chunks keep each entry under the entry cap while preserving transcript
-  order.
+  `<id>` is a valid segment and `<seq>` is a sequence counter zero-padded to
+  at least 6 digits (`000001`, `000002`, ...). Chunks keep each entry under
+  the entry cap while preserving transcript order.
 
 ### 3.2 Encryption
 
@@ -142,11 +146,23 @@ total loss by design; there is no recovery path in this version.
 - **PS-040.** Each passport carries `identity/manifest.json`, a holder-signed
   document `{seq, specVersion, genesisDid, entries}` where `entries` maps each
   entry key to the `sha256:` hex of its ciphertext blob. `seq` increments on
-  every push.
-- **PS-041.** A consumer MUST verify the manifest signature against the current
-  authorized key (genesis or a valid rotation successor) and MUST require
-  `seq` strictly greater than the last verified `seq`. A tampered, unsigned, or
-  rolled-back manifest MUST fail closed.
+  every push. The wire shape is the `SignedManifest` object
+  `{manifest, did, sig}`: `manifest` is the document above, `did` is the
+  signing key's DID, and `sig` is its Ed25519 signature over the canonical
+  JSON of `manifest`. The manifest's own entry key is never listed in
+  `entries`; a self-referential hash cannot exist.
+- **PS-041.** A consumer MUST verify the manifest signature against the
+  authorized keys (genesis or any key a valid rotation chain authorized when
+  the manifest was signed) and MUST reject a `seq` lower than the last
+  verified `seq`. A manifest re-presented at the SAME `seq` MUST be
+  byte-identical to the manifest already verified at that `seq`; equal seq
+  with different bytes is a replacement and MUST fail closed, as MUST a
+  tampered, unsigned, or rolled-back manifest.
+
+  The **manifest hash** of an entry-hash map is defined as: sort the keys;
+  form one `key<TAB>hash` line per entry; join the lines with `\n`; take the
+  SHA-256 of the joined text; prefix the lowercase hex digest with `sha256:`.
+  This is the digest a PUT's `base` refers to.
 
 ## 4. Grants and config
 
@@ -190,18 +206,48 @@ total loss by design; there is no recovery path in this version.
 
 ### 7.1 Endpoints
 
-- `POST /auth/challenge` — returns `{nonce, expiresAt}`; nonce is random,
+- `GET /health`: unauthenticated liveness; returns `{ok: true, ...}`. It is
+  the only route that does not require a bearer token besides the two auth
+  endpoints.
+- `POST /auth/challenge`: returns `{nonce, expiresAt}`; nonce is random,
   single-use, 120-second expiry.
-- `POST /auth/verify` — body `{did, nonce, sig}`; verifies the Ed25519
-  signature over `nonce` and returns `{token, expiresAt}` bearer bound to the
-  DID.
-- `GET /passport/<ns>` — returns the manifest view. `?view=hashes` returns
+- `POST /auth/verify`: body `{did, nonce, sig, attestations?}`; verifies the
+  Ed25519 signature over the UTF-8 bytes of `"passport-auth:" + nonce` and
+  returns `{token, expiresAt}` bearer bound to the DID. The fixed
+  `passport-auth:` prefix is REQUIRED domain separation: the same key signs
+  manifests and attestations, so a server-chosen nonce must never reproduce
+  a signed document of another kind. `attestations`, when present, is the
+  rotation chain the DID terminates (PS-051/052).
+- `GET /passport/<ns>`: returns the manifest view. `?view=hashes` returns
   `{entryKey: sha256-hash}` for delta sync; `?view=integrity` returns the
-  signed integrity manifest.
-- `GET /passport/<ns>/<entryKey>` — returns one ciphertext blob.
-- `PUT /passport/<ns>` — delta upsert `{base, entries: {key: blob}}`. `base`
-  is the manifest hash the writer built from; a stale base returns **409** and
-  nothing commits.
+  signed integrity manifest. Any other `view` value is a 400.
+- `GET /passport/<ns>/<entryKey>`: returns one entry as
+  `{namespace, key, entry, hash}`: `entry` is the base64 ciphertext blob and
+  `hash` is REQUIRED, the `sha256:` digest of the decoded ciphertext.
+- `PUT /passport/<ns>`: delta upsert `{base, entries, deletions?}`.
+  `entries` maps entry keys to base64 ciphertext; `deletions` lists entry
+  keys to remove. `base` is the manifest hash (PS-041) the writer built
+  from, or `null` for a first write; a stale base returns **409** and
+  nothing commits. The response is
+  `{namespace, base, erasure, accepted, deleted, skipped}` where `skipped`
+  lists `{key, reason}` for entries the store refused (reasons include
+  `invalid_key`, `invalid_base64`, `entry_too_large`).
+
+### 7.1a Errors
+
+Non-2xx responses carry the envelope `{error: {code, message, details?}}`:
+`code` is a stable machine-readable token, `message` is human text, and
+`details` is an optional object of structured context. The code vocabulary
+is: `bad_request`, `invalid_namespace`, `invalid_key`, `invalid_did`,
+`invalid_nonce`, `invalid_signature`, `invalid_attestation`, `unauthorized`,
+`forbidden`, `not_found`, `empty`, `entry_not_found`, `entry_unreadable`,
+`method_not_allowed`, `payload_too_large`, `rate_limited`, `stale_base`,
+`manifest_unreadable`, `section_cap_exceeded`, `namespace_too_large`,
+`internal`. Two 404 codes mean "no passport": `empty` (the namespace holds
+nothing) and, for reads, `entry_not_found` (the namespace exists but the key
+does not). Any other 404 is an unknown route, not an empty passport. A path
+under `/passport/` whose percent-encoding cannot be decoded is a **400**
+`bad_request`, not a 404: the route matched, the path is undecodable.
 
 ### 7.2 Auth and transport
 
@@ -229,8 +275,16 @@ total loss by design; there is no recovery path in this version.
 - `spec/clauses.json` is the registry mapping each `PS-###` clause id to a
   checker function name. The registry and this document MUST stay in sync.
 - `spec/vectors/` holds deterministic shared vectors covering encrypt/decrypt,
-  rotation, and chunked sessions. TypeScript and Zig implementations MUST both
-  pass the same vectors.
+  identity, rotation, and the signed manifest. TypeScript and Zig
+  implementations MUST both pass the same vectors.
 - `spec/report-schema.json` defines the checker's output: sorted,
   deterministic, spec-version-stamped JSON with per-clause
   `pass|fail|unsupported`.
+- **PS-200.** The suite CLI (`passport-check`) reproduces every shared vector
+  byte for byte: crypto, identity, rotation, and the signed manifest.
+- **PS-201.** A write through the MCP tools layer recalls back over the wire
+  path: `passport_save` followed by `passport_recall`/`passport_search`/
+  `passport_list` returns the stored entry.
+- **PS-103** is a documentation requirement with no wire-observable behavior;
+  it is deliberately absent from the machine-readable registry and MUST NOT
+  be reported as `pass`, `fail`, or `unsupported` by a checker.

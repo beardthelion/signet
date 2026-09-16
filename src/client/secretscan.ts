@@ -105,14 +105,14 @@ const RULES: Rule[] = [
   {
     id: 'generic-assignment',
     description: 'Hardcoded secret/password/token assignment (quoted)',
-    re: /\b(?:api[_-]?key|secret|passwd|password|token|access[_-]?token)\b[^\n]{0,10}[=:]\s*['"][^'"\n]{8,}['"]/i,
+    re: /\b(?:api[_-]?key|secret|passwd|password|passphrase|token|access[_-]?token)\b[^\n]{0,10}[=:]\s*['"][^'"\n]{8,}['"]/i,
   },
   {
     id: 'generic-assignment-unquoted',
     description: 'Hardcoded secret/password/token assignment (unquoted)',
     // Unquoted values must be long and token-shaped to count, so prose like
     // `password = hunter2` in a story still passes.
-    re: /\b(?:api[_-]?key|secret|passwd|password|token|access[_-]?token)\b\s*[=:]\s*([A-Za-z0-9+/=_-]{24,})\b/i,
+    re: /\b(?:api[_-]?key|secret|passwd|password|passphrase|token|access[_-]?token)\b\s*[=:]\s*([A-Za-z0-9+/=_-]{24,})\b/i,
   },
 ]
 

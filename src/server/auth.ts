@@ -3,11 +3,12 @@
  *
  * Challenge/response: POST /auth/challenge issues a random, single-use nonce
  * (120 s expiry, PS-090); POST /auth/verify checks an Ed25519 signature over
- * the nonce's UTF-8 bytes against the request's did:key and returns a
- * short-lived bearer bound to that DID. Every /passport/ request then needs a
- * bearer whose DID is authorized for the target namespace: the genesis DID
- * encoded in the namespace itself, or the terminal DID of a valid rotation-
- * attestation chain rooted at that genesis (PS-052).
+ * the domain-separated preimage "passport-auth:" + nonce (UTF-8 bytes)
+ * against the request's did:key and returns a short-lived bearer bound to
+ * that DID. Every /passport/ request then needs a bearer whose DID is
+ * authorized for the target namespace: the genesis DID encoded in the
+ * namespace itself while no rotation chain is stored, or the terminal DID of
+ * a valid rotation-attestation chain rooted at that genesis (PS-052).
  *
  * Rotation chains arrive on the /auth/verify request (the client presents its
  * chain) and, once verified, are persisted under the namespace so later
@@ -15,8 +16,10 @@
  * re-verified on every authorization — persistence is a cache, not a trust
  * decision, so a tampered store cannot mint authority.
  *
- * The signed message for /auth/verify is the UTF-8 bytes of the nonce string
- * itself (SPEC §7.1: "the Ed25519 signature over `nonce`").
+ * The signed message for /auth/verify is the UTF-8 bytes of
+ * `"passport-auth:" + nonce` (SPEC §7.1). The same Ed25519 key signs
+ * attestations and manifests; the fixed prefix keeps a server-chosen nonce
+ * from ever doubling as a signed document of another kind.
  */
 
 import type { KeyObject } from 'node:crypto'
@@ -32,8 +35,17 @@ import { attestationsPath, getStore } from './store/blob.ts'
 const NONCE_TTL_MS = 120_000 // fixed by the wire contract, not a tunable
 const nonces = new Map<string, number>() // nonce -> expiresAt ms
 
-export function issueChallenge(now = Date.now()): { nonce: string; expiresAt: string } {
+/**
+ * Hard ceiling on the in-memory maps in this module. Idle eviction keeps the
+ * steady-state small; the ceiling is the stop-loss for a flood of fresh keys
+ * inside one TTL window — past it, new entries are refused rather than
+ * growing the map without bound.
+ */
+const MAP_HARD_LIMIT = 100_000
+
+export function issueChallenge(now = Date.now()): { nonce: string; expiresAt: string } | null {
   sweepExpired(nonces, now)
+  if (nonces.size >= MAP_HARD_LIMIT) return null
   const nonce = randomBytes(32).toString('base64url')
   nonces.set(nonce, now + NONCE_TTL_MS)
   return { nonce, expiresAt: new Date(now + NONCE_TTL_MS).toISOString() }
@@ -56,8 +68,12 @@ export function consumeNonce(nonce: string, now = Date.now()): boolean {
 const TOKEN_TTL_MS = envInt('PASSPORT_TOKEN_TTL_SEC', 600) * 1000
 const tokens = new Map<string, { did: string; expiresAt: number }>()
 
-export function issueToken(did: string, now = Date.now()): { token: string; expiresAt: string } {
+export function issueToken(
+  did: string,
+  now = Date.now(),
+): { token: string; expiresAt: string } | null {
   sweepExpired(tokens, now)
+  if (tokens.size >= MAP_HARD_LIMIT) return null
   const token = randomBytes(32).toString('base64url')
   tokens.set(token, { did, expiresAt: now + TOKEN_TTL_MS })
   return { token, expiresAt: new Date(now + TOKEN_TTL_MS).toISOString() }
@@ -188,6 +204,13 @@ export function attestationHash(att: RotationAttestation): string {
 const GENESIS_PREV_HASH = '0'.repeat(64)
 
 /**
+ * The most attestations a chain may carry. Every element costs a schema
+ * parse plus an Ed25519 verify, so the bound is enforced before any of that
+ * work happens — an oversized chain is refused on length alone.
+ */
+export const MAX_ATTESTATION_CHAIN = 64
+
+/**
  * Verify a presented chain of rotation attestations rooted at `genesis`.
  *
  * Returns the DID the chain terminates at — the currently authorized
@@ -195,10 +218,11 @@ const GENESIS_PREV_HASH = '0'.repeat(64)
  * genesis DID, carry seq = position (1-based, strictly increasing), link
  * prevHash to the previous attestation's canonical-JSON hash ("0"*64 at
  * seq=1), and be signed by its predecessor's key (the genesis key for seq=1).
- * Forged, unsigned, misordered, or mis-linked chains all fail closed.
+ * Forged, unsigned, misordered, mis-linked, or oversized chains all fail
+ * closed.
  */
 export function verifyAttestationChain(genesis: string, raw: unknown): string | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ATTESTATION_CHAIN) return null
   const chain: RotationAttestation[] = []
   for (const item of raw) {
     const parsed = RotationAttestation.safeParse(item)
@@ -224,9 +248,8 @@ export function verifyAttestationChain(genesis: string, raw: unknown): string | 
   return chain[chain.length - 1].newDid
 }
 
-async function readStoredChain(nsSlug: string): Promise<RotationAttestation[] | null> {
-  const raw = await getStore().get(attestationsPath(nsSlug))
-  if (!raw) return null
+/** Parse a stored chain blob. Null when the blob is corrupt in any way. */
+function parseStoredChain(raw: Uint8Array): RotationAttestation[] | null {
   try {
     const parsed: unknown = JSON.parse(new TextDecoder().decode(raw))
     if (!Array.isArray(parsed)) return null
@@ -245,11 +268,31 @@ async function readStoredChain(nsSlug: string): Promise<RotationAttestation[] | 
 }
 
 /**
+ * How long the stored chain claims to be, even when it fails to parse: the
+ * element count if it is at least a JSON array, else +Infinity so a blob we
+ * cannot even measure can never be out-bid by a presented chain.
+ */
+function storedChainLength(raw: Uint8Array): number {
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(raw))
+    return Array.isArray(parsed) ? parsed.length : Number.POSITIVE_INFINITY
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+}
+
+/**
  * Persist a verified chain under the namespace its genesis DID owns. Called
  * from /auth/verify after the chain has passed `verifyAttestationChain`.
  * The longer valid chain wins so a further rotation extends rather than
- * truncates history; an equal-or-shorter valid chain never overwrites a
- * longer stored one.
+ * truncates history; an equal-or-shorter presented chain never overwrites
+ * what is stored.
+ *
+ * Fail closed on a corrupt stored chain: when the stored blob fails
+ * validation it is NOT treated as absent — a shorter presented chain that
+ * overwrote it would re-authorize keys the real stored chain had rotated
+ * out. Only a presented chain strictly longer than the stored element count
+ * can replace it, and a blob that cannot even be measured is never replaced.
  */
 export async function persistAttestationChain(
   genesis: string,
@@ -257,27 +300,32 @@ export async function persistAttestationChain(
 ): Promise<void> {
   const nsSlug = namespaceSlug(namespaceForDid(genesis))
   await withLock(`ns:${nsSlug}`, async () => {
-    const stored = await readStoredChain(nsSlug)
-    const storedValid = stored !== null && verifyAttestationChain(genesis, stored) !== null
-    if (!storedValid || chain.length > stored.length) {
-      await getStore().put(
-        attestationsPath(nsSlug),
-        new TextEncoder().encode(JSON.stringify(chain)),
-      )
+    const raw = await getStore().get(attestationsPath(nsSlug))
+    if (raw) {
+      const stored = parseStoredChain(raw)
+      const storedLen =
+        stored !== null && verifyAttestationChain(genesis, stored) !== null
+          ? stored.length
+          : storedChainLength(raw)
+      if (chain.length <= storedLen) return
     }
+    await getStore().put(attestationsPath(nsSlug), new TextEncoder().encode(JSON.stringify(chain)))
   })
 }
 
 /**
- * Is `did` authorized for `ns`? True iff it is the genesis DID encoded in the
- * namespace (PS-010/PS-011) or terminates the stored valid attestation chain
- * rooted at that genesis (PS-052). A mid-chain key is NOT authorized:
- * rotation replaces the active key, so only the terminal successor counts.
+ * Is `did` authorized for `ns`? While no rotation chain is stored, the
+ * genesis DID encoded in the namespace (PS-010/PS-011). Once a chain is
+ * stored, only its terminal DID authorizes (PS-052): rotation retires the
+ * old key, so the genesis DID loses authority along with every mid-chain
+ * key — otherwise a rotated-out genesis could never be revoked. A stored
+ * chain that fails re-verification authorizes nobody.
  */
 export async function isAuthorizedDid(did: string, ns: string): Promise<boolean> {
   const genesis = genesisDid(ns)
-  if (did === genesis) return true
-  const stored = await readStoredChain(namespaceSlug(ns))
-  if (!stored) return false
+  const raw = await getStore().get(attestationsPath(namespaceSlug(ns)))
+  if (!raw) return did === genesis
+  const stored = parseStoredChain(raw)
+  if (stored === null) return false
   return verifyAttestationChain(genesis, stored) === did
 }

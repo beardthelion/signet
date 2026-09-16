@@ -7,5 +7,7 @@
   "namespace": "passport:did_key_z6MkgS2Bw3AAcdKGv49W3z5E7aYxHgkRQHzG9Sp8Pu5C3Aoo",
   "signMessage": "{\"proof\":\"did:key signs\"}",
   "signature": "793VdfftO8SY72VpY69qtjZ8IcYroKnIDKaSasE71JBDvHTEfXMBRptfUnnA5FIa3gxtQ5qEeITr1oWEmdw5CQ==",
+  "authNonce": "vector-auth-nonce-0001",
+  "authSignature": "cHIdDHtZ2+mGAoG4GAAHwXXdzN5OmyugM2O+GAff4kc0OG1qBUAO+RPCLMwCi2VDYLZZUVQnyndFn8VKsDzXCw==",
   "publicKeyHex": "1d662034bac14e51f660cd712c74b9fe893942c21e5d75062545128386f4485e"
 }

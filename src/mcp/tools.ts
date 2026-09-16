@@ -89,6 +89,15 @@ function snippet(content: string, max = 200): string {
   return oneLine.length > max ? `${oneLine.slice(0, max)}...` : oneLine
 }
 
+// Output bounds: a passport is holder data, but its size is unbounded from
+// the model's perspective — an entry can be megabytes and a namespace can
+// hold thousands of keys. Tool results are capped so one call cannot flood
+// the context; truncation is always marked, never silent.
+const RECALL_ENTRY_MAX = 4_000
+const RECALL_TOTAL_MAX = 16_000
+const SEARCH_HIT_MAX = 50
+const LIST_KEY_MAX = 200
+
 /**
  * Render a failure as text a model can act on. Each typed error gets its own
  * wording and its own recovery move; anything unrecognized is bounded and
@@ -177,6 +186,9 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
   /** Pull and drop the client-managed manifest entry from the result set. */
   const pullUserEntries = async (): Promise<Record<string, string>> => {
     const { entries } = await client.pull()
+    // A successful pull adopts the verified manifest's seq in memory; hand
+    // it to the host so the PS-041 floor survives this process.
+    await sync()
     const out: Record<string, string> = {}
     for (const [k, v] of Object.entries(entries)) if (k !== MANIFEST_ENTRY_KEY) out[k] = v
     return out
@@ -188,7 +200,11 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
    * passport; otherwise a full pull filtered locally — identical results.
    */
   const pullSectionEntries = async (section: Section): Promise<Record<string, string>> => {
-    if (client.pullSection) return client.pullSection(section)
+    if (client.pullSection) {
+      const entries = await client.pullSection(section)
+      await sync()
+      return entries
+    }
     const entries = await pullUserEntries()
     const prefix = `${section}/`
     return Object.fromEntries(Object.entries(entries).filter(([k]) => k.startsWith(prefix)))
@@ -224,8 +240,32 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
         if (ranked.length === 0) {
           return ok(`(nothing in the passport looks relevant to "${bounded(query, 120)}")`)
         }
-        const body = ranked.map(r => `### ${r.key}\n${r.content.trim()}`).join('\n\n')
-        return ok(`${ranked.length} relevant entr${ranked.length === 1 ? 'y' : 'ies'}:\n\n${body}`)
+        // Entries can be arbitrarily large; each is capped and the whole
+        // answer carries a total budget so recall cannot flood the context.
+        const parts: string[] = []
+        let budget = RECALL_TOTAL_MAX
+        let dropped = 0
+        for (const r of ranked) {
+          const content = r.content.trim()
+          const clipped =
+            content.length > RECALL_ENTRY_MAX
+              ? `${content.slice(0, RECALL_ENTRY_MAX)}... [truncated]`
+              : content
+          const block = `### ${r.key}\n${clipped}`
+          if (block.length > budget) {
+            dropped++
+            continue
+          }
+          parts.push(block)
+          budget -= block.length
+        }
+        const trailer =
+          dropped > 0
+            ? `\n\n(${dropped} more relevant entr${dropped === 1 ? 'y' : 'ies'} not shown)`
+            : ''
+        return ok(
+          `${parts.length} relevant entr${parts.length === 1 ? 'y' : 'ies'}:\n\n${parts.join('\n\n')}${trailer}`,
+        )
       } catch (e) {
         return fail(renderError('Recalling entries', e, 'Nothing was read.'))
       }
@@ -233,7 +273,8 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
 
     /** Literal substring search over entry keys and decrypted content. */
     async search(query: string): Promise<ToolResult> {
-      const needle = query.toLowerCase()
+      const needle = query.trim().toLowerCase()
+      if (!needle) return fail('search needs a non-empty query')
       try {
         const entries = await pullUserEntries()
         const hits = Object.entries(entries).filter(
@@ -241,8 +282,11 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
             key.toLowerCase().includes(needle) || content.toLowerCase().includes(needle),
         )
         if (hits.length === 0) return ok(`no matches for "${bounded(query, 120)}"`)
-        const body = hits.map(([key, content]) => `- ${key}: ${snippet(content)}`).join('\n')
-        return ok(`${hits.length} match(es) for "${bounded(query, 120)}":\n${body}`)
+        const shown = hits.slice(0, SEARCH_HIT_MAX)
+        const body = shown.map(([key, content]) => `- ${key}: ${snippet(content)}`).join('\n')
+        const trailer =
+          hits.length > shown.length ? `\n(${hits.length - shown.length} more not shown)` : ''
+        return ok(`${hits.length} match(es) for "${bounded(query, 120)}":\n${body}${trailer}`)
       } catch (e) {
         return fail(renderError('Searching entries', e, 'Nothing was read.'))
       }
@@ -252,15 +296,24 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
     async list(section?: Section): Promise<ToolResult> {
       try {
         const hashes = await client.hashes()
-        let keys = Object.keys(hashes).sort()
+        await sync() // keep seq persistence uniform across the read tools
+        // The hashes view is unsigned store output: only keys that pass the
+        // entry-key grammar may reach a model's context, and each passes
+        // through the bounded renderer.
+        let keys = Object.keys(hashes)
+          .filter(k => EntryKey.safeParse(k).success)
+          .sort()
         if (section) keys = keys.filter(k => k.split('/')[0] === section)
         if (keys.length === 0) {
           return ok(
             section ? `(no entries under ${bounded(section, 40)}/)` : '(the passport is empty)',
           )
         }
+        const shown = keys.slice(0, LIST_KEY_MAX)
+        const trailer =
+          keys.length > shown.length ? `\n(${keys.length - shown.length} more not shown)` : ''
         return ok(
-          `${keys.length} entr${keys.length === 1 ? 'y' : 'ies'}:\n${keys.map(k => `- ${k}`).join('\n')}`,
+          `${keys.length} entr${keys.length === 1 ? 'y' : 'ies'}:\n${shown.map(k => `- ${bounded(k, 260)}`).join('\n')}${trailer}`,
         )
       } catch (e) {
         return fail(renderError('Listing entries', e, 'No entry keys were read.'))
@@ -308,6 +361,7 @@ export function makeTools(client: PassportToolClient, opts: ToolOptions = {}) {
           const bad = keyError(entryKey)
           if (bad) return fail(bad)
           const content = await client.readEntry(entryKey)
+          await sync() // the read verified a manifest; persist the seq
           if (content === null) return ok(`(no config entry "${bounded(key, 120)}" is stored)`)
           return ok(`config/${key}:\n${content}`)
         }

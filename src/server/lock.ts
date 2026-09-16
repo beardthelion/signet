@@ -16,16 +16,16 @@ export async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T>
   const prev = locks.get(key) ?? Promise.resolve()
   let release!: () => void
   const next = new Promise<void>(r => (release = r))
-  locks.set(
-    key,
-    prev.then(() => next),
-  )
+  // The map holds the chained tail — the promise a later caller waits on —
+  // so cleanup compares against the same value that was stored.
+  const tail = prev.then(() => next)
+  locks.set(key, tail)
   await prev.catch(() => {}) // wait our turn; ignore prior errors
   try {
     return await fn()
   } finally {
     release()
     // Clean up if we're the tail of the chain to avoid unbounded growth.
-    if (locks.get(key) === next) locks.delete(key)
+    if (locks.get(key) === tail) locks.delete(key)
   }
 }
