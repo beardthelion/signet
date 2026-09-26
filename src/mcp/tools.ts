@@ -33,6 +33,13 @@ import {
   SignetTimeoutError,
 } from '../client/client.ts'
 import { SecretFoundError } from '../client/secretscan.ts'
+import {
+  hydrateSession,
+  isMirroredSessionFile,
+  mirrorSession,
+  SignetMirrorCorrupt,
+  SignetMirrorOversize,
+} from '../client/session_mirror.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
 import { rankEntries } from './relevance.ts'
 
@@ -98,6 +105,8 @@ const RECALL_TOTAL_MAX = 16_000
 const SEARCH_HIT_MAX = 50
 const LIST_KEY_MAX = 200
 const GET_ENTRY_MAX = 16_000
+const SESSION_FILE_MAX = 8_000
+const SESSION_TOTAL_MAX = 32_000
 
 /**
  * Render a failure as text a model can act on. Each typed error gets its own
@@ -122,6 +131,12 @@ function renderError(action: string, e: unknown, tail: string): string {
   }
   if (e instanceof SignetTimeoutError) {
     return `${action} failed: the store accepted the connection but did not answer within ${e.timeoutMs}ms. Retry once; if it keeps happening, tell the user the store is slow or stuck. ${tail}`
+  }
+  if (e instanceof SignetMirrorOversize) {
+    return `${action} refused: ${bounded(e.message)}. Mirrored session members carry per-file caps and a member bound (SN-023); reduce the content and retry. ${tail}`
+  }
+  if (e instanceof SignetMirrorCorrupt) {
+    return `${action} failed: ${bounded(e.message)}. A torn or malformed mirror fails closed - nothing is partially restored or written (SN-023). ${tail}`
   }
   if (e instanceof SignetHttpError) {
     if (e.status === 401) {
@@ -422,6 +437,98 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
         return ok(`saved "${entryKey}" in ${r.namespace} (manifest seq ${r.seq})`)
       } catch (e) {
         return fail(renderError(`Setting config "${bounded(key, 120)}"`, e, 'Nothing was stored.'))
+      }
+    },
+
+    /**
+     * Mirror a session's members into sessions/<id>/ as the chunked v2
+     * index (SN-023). `files` is the complete desired member set: names
+     * outside the mirrored-member allowlist are refused rather than
+     * silently dropped, assembled content is credential-scanned before
+     * chunking (SN-110), and remote chunks the new index does not name
+     * are deleted.
+     */
+    async sessionPush(sessionId: string, files: Record<string, string>): Promise<ToolResult> {
+      if (!isKeySegment(sessionId)) {
+        return fail(
+          `"${bounded(sessionId, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
+        )
+      }
+      const names = Object.keys(files)
+      if (names.length === 0) {
+        return fail(
+          'Refused: session_push with an empty file set would delete the remote mirror. Name at least one mirrored member; to remove a mirror, delete its sessions/<id>/ keys with signet_delete.',
+        )
+      }
+      const bad = names.filter(n => !isMirroredSessionFile(n))
+      if (bad.length > 0) {
+        return fail(
+          `Refused: ${bad.map(n => `"${bounded(n, 60)}"`).join(', ')} ${bad.length === 1 ? 'is not a' : 'are not'} mirrored session member${bad.length === 1 ? '' : 's'} (SN-023). Mirrored members are events.jsonl, session.json, checkpoint.json, display.json, authority.json, usage-v2.json, and commit.<hex>.json records.`,
+        )
+      }
+      try {
+        const r = await mirrorSession(client, sessionId, files)
+        await sync()
+        const tombstone =
+          r.tombstoned.length > 0
+            ? ` WARNING: ${r.tombstoned.length} chunk(s) were tombstoned by a newer delete; re-read the mirror before re-adding them.`
+            : ''
+        return ok(
+          `mirrored session "${sessionId}": ${names.length} file(s), ${r.uploaded.length} chunk(s) uploaded, ${r.unchanged.length} unchanged, ${r.deleted.length} deleted.${tombstone}`,
+        )
+      } catch (e) {
+        return fail(
+          renderError(`Mirroring session "${bounded(sessionId, 120)}"`, e, 'Nothing was stored.'),
+        )
+      }
+    },
+
+    /**
+     * Reassemble a mirrored session. Each member's content is bounded
+     * per file and overall; a truncated file keeps its true byte count
+     * in the header, and any chunk can be paged directly with
+     * signet_get on sessions/<id>/<seq> (the index sits at seq 000000).
+     */
+    async sessionPull(sessionId: string): Promise<ToolResult> {
+      if (!isKeySegment(sessionId)) {
+        return fail(
+          `"${bounded(sessionId, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
+        )
+      }
+      try {
+        const files = await hydrateSession(client, sessionId)
+        await sync()
+        if (files === null) {
+          return ok(`(no mirror stored for session "${bounded(sessionId, 120)}")`)
+        }
+        const entries = Object.entries(files)
+        const parts: string[] = []
+        let budget = SESSION_TOTAL_MAX
+        let dropped = 0
+        for (const [name, content] of entries) {
+          const clipped =
+            content.length > SESSION_FILE_MAX
+              ? `${content.slice(0, SESSION_FILE_MAX)}... [truncated]`
+              : content
+          const block = `### ${name} (${Buffer.byteLength(content)} bytes)\n${clipped}`
+          if (block.length > budget) {
+            dropped++
+            continue
+          }
+          parts.push(block)
+          budget -= block.length
+        }
+        const trailer =
+          dropped > 0
+            ? `\n\n(${dropped} more file(s) not shown; page chunks with signet_get - the index is sessions/${sessionId}/000000)`
+            : ''
+        return ok(
+          `session "${sessionId}": ${entries.length} file(s):\n\n${parts.join('\n\n')}${trailer}`,
+        )
+      } catch (e) {
+        return fail(
+          renderError(`Pulling session "${bounded(sessionId, 120)}"`, e, 'Nothing was read.'),
+        )
       }
     },
 

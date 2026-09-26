@@ -44,6 +44,13 @@ only ever holds ciphertext; decryption happens locally, inside this server.
 - signet_grant_list() - enumerate recorded grants. Read-only.
 - signet_grant_record(...) - record a holder-confirmed grant. The write
   requires confirmed: true, and the holder must actually have confirmed.
+- signet_session_push(session_id, files) - mirror a session as the chunked
+  v2 index under sessions/<id>/ (SN-023). files maps member names to
+  content and is the complete desired set; only the session-member
+  allowlist is accepted (events.jsonl, the five metadata files, and
+  commit.<hex>.json records).
+- signet_session_pull(session_id) - reassemble a mirrored session,
+  fail-closed on a torn or malformed mirror.
 
 ## Grants are records, not permissions
 

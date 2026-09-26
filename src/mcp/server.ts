@@ -226,6 +226,37 @@ export async function main(): Promise<void> {
     async args => toMcp(await tools.grantRecord(args)),
   )
 
+  server.registerTool(
+    'signet_session_push',
+    {
+      title: 'Mirror a session into the signet',
+      description:
+        'Write a session as the chunked v2 mirror (SN-023): a JSON index plus per-file chunk entries under sessions/<id>/. The files map is the complete desired member set; only events.jsonl, session.json, checkpoint.json, display.json, authority.json, usage-v2.json, and commit.<hex>.json members are accepted. Content is credential-scanned before encryption (SN-110).',
+      inputSchema: {
+        session_id: z
+          .string()
+          .describe('Session id: letters, digits, ".", "_", "-", starting with a letter or digit.'),
+        files: z
+          .record(z.string(), z.string())
+          .describe('Map of member filename to content; the complete desired member set.'),
+      },
+    },
+    async ({ session_id, files }) => toMcp(await tools.sessionPush(session_id, files)),
+  )
+
+  server.registerTool(
+    'signet_session_pull',
+    {
+      title: 'Reassemble a mirrored session',
+      description:
+        'Read back a session mirrored with signet_session_push: verifies the index and every chunk (fail-closed on a torn mirror, SN-023), then returns each member file bounded in size.',
+      inputSchema: {
+        session_id: z.string().describe('The session id previously mirrored.'),
+      },
+    },
+    async ({ session_id }) => toMcp(await tools.sessionPull(session_id)),
+  )
+
   const transport = new StdioServerTransport()
   await server.connect(transport)
   stderr(`ready • url=${process.env.SIGNET_URL ?? DEFAULT_URL} • namespace=${client.namespace}`)

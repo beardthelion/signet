@@ -176,6 +176,12 @@ function encodeIndex(index: MirrorIndex): string {
   return `{"v":2,"files":[${files}]}`
 }
 
+/**
+ * The client surface the mirror touches. Structural so the MCP tool
+ * layer's narrower client type satisfies it; SignetClient does.
+ */
+export type MirrorClient = Pick<SignetClient, 'readEntry' | 'hashes' | 'push'>
+
 export type MirrorOptions = {
   /** Per-file plaintext caps; falls back to DEFAULT_FILE_CAP. */
   caps?: Record<string, number>
@@ -204,7 +210,7 @@ function capFor(name: string, caps?: Record<string, number>): number {
  * the new index ranges are deleted. Prior-index matches skip re-upload.
  */
 export async function mirrorSession(
-  client: SignetClient,
+  client: MirrorClient,
   sessionId: string,
   files: Record<string, string>,
   opts: MirrorOptions = {},
@@ -328,7 +334,7 @@ export async function mirrorSession(
  * index exists; throws SignetMirrorCorrupt on a torn or malformed mirror.
  */
 export async function hydrateSession(
-  client: SignetClient,
+  client: MirrorClient,
   sessionId: string,
 ): Promise<Record<string, string> | null> {
   if (!SESSION_ID_RE.test(sessionId)) {

@@ -424,7 +424,7 @@ describe('grant tools', () => {
 
   test('no tool exposes grant application (SN-061)', async () => {
     const { tools } = rig()
-    // Exactly the ten specified verbs, and nothing that sounds like it could
+    // Exactly the specified verbs, and nothing that sounds like it could
     // honor, apply, enforce, or consume a grant.
     expect(Object.keys(tools).sort()).toEqual([
       'configGet',
@@ -437,10 +437,74 @@ describe('grant tools', () => {
       'recall',
       'save',
       'search',
+      'sessionPull',
+      'sessionPush',
     ])
     for (const name of Object.keys(tools)) {
       expect(name).not.toMatch(/apply|honor|enforce|consume|activate/i)
     }
+  })
+})
+
+// ─── Session mirror tools ──────────────────────────────────────────────
+
+describe('session mirror tools', () => {
+  test('push then pull round-trips the member files', async () => {
+    const { tools } = rig()
+    const push = await tools.sessionPush('sess-1', {
+      'session.json': '{"id":"sess-1"}\n',
+      'events.jsonl': '{"e":1}\n{"e":2}\n',
+    })
+    expect(push.isError).toBeUndefined()
+    expect(push.text).toContain('mirrored session "sess-1"')
+
+    const pull = await tools.sessionPull('sess-1')
+    expect(pull.isError).toBeUndefined()
+    expect(pull.text).toContain('### session.json')
+    expect(pull.text).toContain('{"e":1}')
+  })
+
+  test('push refuses names outside the member allowlist', async () => {
+    const { tools } = rig()
+    const r = await tools.sessionPush('sess-1', { 'notes.txt': 'x\n' })
+    expect(r.isError).toBe(true)
+    expect(r.text).toContain('not a')
+    const list = await tools.list('sessions')
+    expect(list.text).toContain('(no entries under sessions/)')
+  })
+
+  test('push refuses an empty file set and a malformed id', async () => {
+    const { tools } = rig()
+    const empty = await tools.sessionPush('sess-1', {})
+    expect(empty.isError).toBe(true)
+    const bad = await tools.sessionPush('../escape', { 'session.json': '{}\n' })
+    expect(bad.isError).toBe(true)
+  })
+
+  test('pull reports an absent mirror and fails closed on a torn one', async () => {
+    const { tools } = rig()
+    const absent = await tools.sessionPull('ghost')
+    expect(absent.isError).toBeUndefined()
+    expect(absent.text).toContain('no mirror stored')
+
+    // Plant a torn mirror: the index names a chunk that is absent.
+    await tools.save(
+      'sessions/torn/000000',
+      `{"v":2,"files":[{"name":"events.jsonl","first":1,"chunks":2,"bytes":16,"sha256":"${'0'.repeat(64)}"}]}`,
+    )
+    await tools.save('sessions/torn/000001', '{"t":1}\n')
+    const torn = await tools.sessionPull('torn')
+    expect(torn.isError).toBe(true)
+    expect(torn.text).toContain('chunk 2')
+  })
+
+  test('the pre-encryption scan runs on assembled session files', async () => {
+    const { tools } = rig()
+    const r = await tools.sessionPush('sess-1', {
+      'events.jsonl': `token: ghp_${'a'.repeat(30)}\n`,
+    })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/secret|credential/i)
   })
 })
 
