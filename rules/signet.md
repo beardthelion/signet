@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Signet memory
 
 This environment has a `signet` MCP server: an encrypted, portable store for
