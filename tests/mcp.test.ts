@@ -201,6 +201,23 @@ describe('signet tools over the real encrypted wire path', () => {
     expect(r.text).toContain('Fly')
   })
 
+  test('get fetches one entry by exact key and misses cleanly', async () => {
+    const { tools } = rig()
+    await tools.save('memory/prefs.md', 'The user prefers terse answers.\n')
+
+    const got = await tools.get('memory/prefs.md')
+    expect(got.isError).toBeUndefined()
+    expect(got.text).toContain('memory/prefs.md')
+    expect(got.text).toContain('terse answers')
+
+    const miss = await tools.get('memory/absent.md')
+    expect(miss.isError).toBeUndefined()
+    expect(miss.text).toContain('no entry')
+
+    const bad = await tools.get('not a key')
+    expect(bad.isError).toBe(true)
+  })
+
   test('search finds entries by key and by content', async () => {
     const { tools } = rig()
     await tools.save('memory/prefs.md', 'The user prefers terse answers.\n')
@@ -407,12 +424,13 @@ describe('grant tools', () => {
 
   test('no tool exposes grant application (SN-061)', async () => {
     const { tools } = rig()
-    // Exactly the nine specified verbs, and nothing that sounds like it could
+    // Exactly the ten specified verbs, and nothing that sounds like it could
     // honor, apply, enforce, or consume a grant.
     expect(Object.keys(tools).sort()).toEqual([
       'configGet',
       'configSet',
       'delete',
+      'get',
       'grantList',
       'grantRecord',
       'list',

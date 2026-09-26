@@ -110,6 +110,19 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
+    'signet_get',
+    {
+      title: 'Fetch a signet entry',
+      description:
+        'Return the decrypted content of one entry by exact key (e.g. "memory/preferences.md"). Use when you already know the key; use signet_recall or signet_search to find entries.',
+      inputSchema: {
+        key: z.string().describe('The exact entry key to fetch.'),
+      },
+    },
+    async ({ key }) => toMcp(await tools.get(key)),
+  )
+
+  server.registerTool(
     'signet_search',
     {
       title: 'Search signet entries',

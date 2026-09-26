@@ -97,6 +97,7 @@ const RECALL_ENTRY_MAX = 4_000
 const RECALL_TOTAL_MAX = 16_000
 const SEARCH_HIT_MAX = 50
 const LIST_KEY_MAX = 200
+const GET_ENTRY_MAX = 16_000
 
 /**
  * Render a failure as text a model can act on. Each typed error gets its own
@@ -268,6 +269,28 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
         )
       } catch (e) {
         return fail(renderError('Recalling entries', e, 'Nothing was read.'))
+      }
+    },
+
+    /**
+     * Fetch one entry by exact key. The direct-fetch complement to
+     * recall/search: when the caller already knows the key (from list or a
+     * reference inside another entry) this avoids a full pull.
+     */
+    async get(key: string): Promise<ToolResult> {
+      const bad = keyError(key)
+      if (bad) return fail(bad)
+      try {
+        const content = await client.readEntry(key)
+        await sync()
+        if (content === null) return ok(`(no entry "${bounded(key, 120)}" is stored)`)
+        const clipped =
+          content.length > GET_ENTRY_MAX
+            ? `${content.slice(0, GET_ENTRY_MAX)}... [truncated]`
+            : content
+        return ok(`${key}:\n${clipped}`)
+      } catch (e) {
+        return fail(renderError(`Reading "${bounded(key, 120)}"`, e, 'Nothing was read.'))
       }
     },
 
