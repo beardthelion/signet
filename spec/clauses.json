@@ -21,6 +21,7 @@
       "check": "checkTraversalRejected"
     },
     { "id": "SN-022", "title": "chunked session grammar", "check": "checkSessionChunks" },
+    { "id": "SN-023", "title": "session mirror index format", "check": "checkSessionMirror" },
     { "id": "SN-030", "title": "blob envelope format", "check": "checkBlobFormat" },
     { "id": "SN-031", "title": "namespace-bound scrypt KDF", "check": "checkKdf" },
     { "id": "SN-032", "title": "AES-256-GCM with entry-key AAD", "check": "checkAead" },

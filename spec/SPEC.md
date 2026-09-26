@@ -109,6 +109,22 @@ total loss by design; there is no recovery path in this version.
   `<id>` is a valid segment and `<seq>` is a sequence counter zero-padded to
   at least 6 digits (`000001`, `000002`, ...). Chunks keep each entry under
   the entry cap while preserving transcript order.
+- **SN-023.** A mirrored session publishes a JSON index at
+  `sessions/<id>/000000` of the form `{"v":2,"files":[...]}` where each
+  record is `{name, first, chunks, bytes, sha256}`: `first` is the chunk
+  seq the file's range starts at, `chunks` its chunk count, `bytes` its
+  plaintext length, and `sha256` the lowercase hex digest of the
+  assembled plaintext. Chunk regions are cap-sized per file and persist
+  across writes, so growth, removal, and addition of one member never
+  renumber another member's chunks; remote chunk keys no record names
+  are deleted. Mirrored members are exactly `events.jsonl`,
+  `checkpoint.json`, `display.json`, `authority.json`, `session.json`,
+  `usage-v2.json`, and `commit.<hex>.json` records (never
+  `commit.pending.json`); member names are flat segments per SN-020.
+  The credential scan runs on the assembled file before chunking, so a
+  secret straddling a chunk boundary cannot split into two clean halves.
+  Hydration MUST fail closed: a missing chunk, a byte-count mismatch, or
+  a sha256 mismatch is a corrupt mirror, never a partial restore.
 
 ### 3.2 Encryption
 

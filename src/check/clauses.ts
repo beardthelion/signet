@@ -60,6 +60,7 @@ import {
   verifyDidSignature,
 } from '../client/identity.ts'
 import { SecretFoundError } from '../client/secretscan.ts'
+import { hydrateSession, SignetMirrorCorrupt } from '../client/session_mirror.ts'
 import { makeTools } from '../mcp/tools.ts'
 import {
   EntryKey,
@@ -369,6 +370,67 @@ const checkSessionChunks: CheckFn = async ctx => {
     'sessions/s-1/000001/extra',
   ]) {
     if (!skipped.has(k)) problems.push(`malformed session key ${k} was not skipped`)
+  }
+  return verdict(problems)
+}
+
+/**
+ * SN-023 - a mirrored session carries the v2 index + sparse stable
+ * regions, and hydration fails closed on a torn mirror. The fixture is
+ * written raw (not through mirrorSession) so the check pins the wire
+ * format itself, not the suite's own writer.
+ */
+const checkSessionMirror: CheckFn = async ctx => {
+  const problems: string[] = []
+  const s = await ctx.provision()
+  const sha = (t: string) => createHash('sha256').update(t).digest('hex')
+  const files: Record<string, string> = {
+    'authority.json': '{"a":1}\n',
+    'events.jsonl': '{"e":1}\n',
+    'session.json': '{"id":"ck-mirror"}\n',
+  }
+  const rec = (name: string, first: number) =>
+    `{"name":"${name}","first":${first},"chunks":1,"bytes":${Buffer.byteLength(files[name]!)},` +
+    `"sha256":"${sha(files[name]!)}"}`
+  // Cap-sized strides in sorted-name order: authority 16, events 1024,
+  // session 16. The gaps between regions are intentional: hydration
+  // reads only the seqs records name.
+  const index =
+    `{"v":2,"files":[${rec('authority.json', 1)},` +
+    `${rec('events.jsonl', 17)},${rec('session.json', 1041)}]}`
+  await s.client.push({
+    'sessions/ck-mirror/000000': index,
+    'sessions/ck-mirror/000001': files['authority.json']!,
+    'sessions/ck-mirror/000017': files['events.jsonl']!,
+    'sessions/ck-mirror/001041': files['session.json']!,
+  })
+  const back = await hydrateSession(s.client, 'ck-mirror')
+  if (back === null) {
+    problems.push('a pushed mirror index did not hydrate')
+  } else {
+    for (const [name, content] of Object.entries(files)) {
+      if (back[name] !== content) problems.push(`mirror file ${name} did not round-trip`)
+    }
+    if (Object.keys(back).length !== Object.keys(files).length) {
+      problems.push('mirror hydration returned extra files')
+    }
+  }
+
+  // A torn mirror (index names a chunk that is absent) must fail
+  // closed, never produce a partial restore.
+  const tornSha = sha('{"t":1}\n')
+  await s.client.push({
+    'sessions/ck-torn/000000': `{"v":2,"files":[{"name":"events.jsonl","first":1,"chunks":2,"bytes":8,"sha256":"${tornSha}"}]}`,
+    'sessions/ck-torn/000001': '{"t":1}\n',
+  })
+  try {
+    const torn = await hydrateSession(s.client, 'ck-torn')
+    if (torn !== null) problems.push('a torn mirror hydrated without error')
+    else problems.push('a torn mirror read as absent instead of corrupt')
+  } catch (e) {
+    if (!(e instanceof SignetMirrorCorrupt)) {
+      problems.push('a torn mirror failed with the wrong error')
+    }
   }
   return verdict(problems)
 }
@@ -1640,6 +1702,7 @@ export const checks: Record<string, CheckFn> = {
   checkEntryKeyGrammar,
   checkTraversalRejected,
   checkSessionChunks,
+  checkSessionMirror,
   checkBlobFormat,
   checkKdf,
   checkAead,
