@@ -682,3 +682,141 @@ describe('custody export/import (SN-102)', () => {
     expect(loaded?.genesisDid).toBe(id.did)
   })
 })
+
+describe('session mirroring (SN-022)', () => {
+  test('mirror writes index + chunks; hydrate reproduces the files', async () => {
+    const { mirrorSession, hydrateSession } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+
+    const files = {
+      'events.jsonl': '{"e":1}\n{"e":2}\n',
+      'session.json': '{"id":"sess1"}\n',
+      'authority.json': '{"a":1}\n',
+    }
+    const r = await mirrorSession(client, 'sess1', files)
+    expect(r.uploaded.length).toBeGreaterThan(0)
+
+    const hashes = await client.hashes()
+    expect(hashes['sessions/sess1/000000']).toBeDefined()
+    // Regions: authority.json stride 16 -> seq 1; events.jsonl stride
+    // 1024 -> seq 17; session.json -> seq 1041.
+    expect(hashes['sessions/sess1/000001']).toBeDefined()
+    expect(hashes['sessions/sess1/000017']).toBeDefined()
+    expect(hashes['sessions/sess1/001041']).toBeDefined()
+    expect(hashes['sessions/sess1/000002']).toBeUndefined()
+
+    const back = await hydrateSession(client, 'sess1')
+    expect(back).not.toBeNull()
+    expect(back!).toEqual(files)
+  })
+
+  test('a grown file keeps its region and does not shift neighbors', async () => {
+    const { mirrorSession, hydrateSession } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+
+    // Small chunkBytes + caps so growth crosses a chunk boundary under
+    // the stub's 1KB entry cap. Each file's region is 4 chunks (128/32).
+    const caps = { 'authority.json': 128, 'display.json': 128, 'session.json': 128 }
+    const mopts = { chunkBytes: 32, caps }
+    const base = {
+      'authority.json': 'a\n',
+      'display.json': 'b\n',
+      'session.json': 'c\n',
+    }
+    await mirrorSession(client, 'sess2', base, mopts)
+    // Grow the first-sorted file past a chunk boundary: two chunks now.
+    const grown = 'a'.repeat(48)
+    await mirrorSession(client, 'sess2', { ...base, 'authority.json': grown }, mopts)
+
+    const hashes = await client.hashes()
+    expect(hashes['sessions/sess2/000001']).toBeDefined()
+    expect(hashes['sessions/sess2/000002']).toBeDefined()
+    // display and session keep their regions at seqs 5 and 9; nothing shifted.
+    expect(hashes['sessions/sess2/000005']).toBeDefined()
+    expect(hashes['sessions/sess2/000009']).toBeDefined()
+
+    const back = await hydrateSession(client, 'sess2')
+    expect(back!['authority.json']).toBe(grown)
+  })
+
+  test('a removed file leaves the index and its chunks are deleted', async () => {
+    const { mirrorSession, hydrateSession } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+
+    await mirrorSession(client, 'sess3', {
+      'authority.json': 'a\n',
+      'checkpoint.json': 'b\n',
+    })
+    const r = await mirrorSession(client, 'sess3', { 'checkpoint.json': 'b\n' })
+    // authority's chunk at seq 1 is deleted; checkpoint keeps region 17.
+    expect(r.deleted).toContain('sessions/sess3/000001')
+    const hashes = await client.hashes()
+    expect(hashes['sessions/sess3/000001']).toBeUndefined()
+    expect(hashes['sessions/sess3/000017']).toBeDefined()
+    const back = await hydrateSession(client, 'sess3')
+    expect(back).toEqual({ 'checkpoint.json': 'b\n' })
+  })
+
+  test('hydrate rejects a torn mirror', async () => {
+    const { hydrateSession, SignetMirrorCorrupt } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+    // Hand-build a mirror whose index names a missing chunk.
+    const sha = createHash('sha256').update('abcabc').digest('hex')
+    await client.push({
+      'sessions/torn/000000': `{"v":2,"files":[{"name":"events.jsonl","first":1,"chunks":2,"bytes":6,"sha256":"${sha}"}]}`,
+      'sessions/torn/000001': 'abc',
+    })
+    await expect(hydrateSession(client, 'torn')).rejects.toBeInstanceOf(SignetMirrorCorrupt)
+  })
+
+  test('only fx-compatible session members mirror', async () => {
+    const { mirrorSession, isMirroredSessionFile } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+
+    expect(isMirroredSessionFile('events.jsonl')).toBe(true)
+    expect(isMirroredSessionFile('commit.a1b2c3.json')).toBe(true)
+    expect(isMirroredSessionFile('commit.pending.json')).toBe(false)
+    expect(isMirroredSessionFile('notes.md')).toBe(false)
+    expect(isMirroredSessionFile('commit.x/../../e.json')).toBe(false)
+
+    // A member outside the interop set is rejected, never silently dropped.
+    await expect(mirrorSession(client, 'sess4', { 'notes.md': 'x\n' })).rejects.toBeInstanceOf(
+      Error,
+    )
+    // commit records mirror; the transient pending file does not.
+    const r = await mirrorSession(client, 'sess4', {
+      'commit.a1b2c3.json': '{}\n',
+    })
+    expect(r.uploaded.length).toBeGreaterThan(0)
+  })
+
+  test('hydrate rejects an index naming a non-mirrored member', async () => {
+    const { hydrateSession, SignetMirrorCorrupt } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+
+    const sha = createHash('sha256').update('x').digest('hex')
+    await client.push({
+      'sessions/rogue/000000': `{"v":2,"files":[{"name":"evil.txt","first":1,"chunks":1,"bytes":1,"sha256":"${sha}"}]}`,
+      'sessions/rogue/000001': 'x',
+    })
+    await expect(hydrateSession(client, 'rogue')).rejects.toBeInstanceOf(SignetMirrorCorrupt)
+  })
+})

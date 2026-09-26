@@ -44,6 +44,11 @@ import {
 } from '../src/client/custody.ts'
 import { generateIdentity, namespaceFor } from '../src/client/identity.ts'
 import { clientFromCustody, persistManifestSeq } from '../src/client/session.ts'
+import {
+  hydrateSession,
+  isMirroredSessionFile,
+  mirrorSession,
+} from '../src/client/session_mirror.ts'
 import { captureSession } from '../src/learn/capture.ts'
 import { DEFAULT_URL } from '../src/types/defaults.ts'
 import { SECTIONS } from '../src/types/index.ts'
@@ -259,11 +264,56 @@ async function cmdRotate(): Promise<void> {
   console.log(`namespace unchanged: ${client.namespace}`)
 }
 
+async function cmdSession(
+  sub: string | undefined,
+  id: string | undefined,
+  dir: string | undefined,
+): Promise<void> {
+  if ((sub !== 'push' && sub !== 'pull') || !id || !dir) usage()
+  const { client, secrets } = await makeClient()
+  if (sub === 'push') {
+    const files: Record<string, string> = {}
+    const skipped: string[] = []
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      if (!e.isFile() || !isMirroredSessionFile(e.name)) {
+        skipped.push(e.name)
+        continue
+      }
+      files[e.name] = await readFile(join(dir, e.name), 'utf8')
+    }
+    if (skipped.length) {
+      console.error(`note: skipped non-mirrored members: ${skipped.join(', ')}`)
+    }
+    const r = await mirrorSession(client, id, files)
+    await recordSeq(client, secrets)
+    console.log(
+      `mirrored session ${id}: ${r.uploaded.length} uploaded, ` +
+        `${r.unchanged.length} unchanged, ${r.deleted.length} deleted`,
+    )
+    if (r.tombstoned.length) {
+      console.error(`warning: tombstoned (re-read before re-adding): ${r.tombstoned.join(', ')}`)
+    }
+    return
+  }
+  const files = await hydrateSession(client, id)
+  if (!files) {
+    console.log(`no mirror for session ${id}`)
+    return
+  }
+  for (const [name, content] of Object.entries(files)) {
+    const dest = join(dir, name)
+    await mkdir(dirname(dest), { recursive: true })
+    await writeFile(dest, content)
+  }
+  await recordSeq(client, secrets)
+  console.log(`hydrated session ${id}: ${Object.keys(files).length} files -> ${dir}`)
+}
+
 // ─── Dispatch ───────────────────────────────────────────────────────────
 
 const argv = process.argv.slice(2)
 const force = argv.includes('--force')
-const [cmd, a] = argv.filter(x => x !== '--force')
+const [cmd, a, b, c] = argv.filter(x => x !== '--force')
 
 try {
   switch (cmd) {
@@ -277,6 +327,9 @@ try {
     case 'pull':
       if (!a) usage()
       await cmdPull(a!)
+      break
+    case 'session':
+      await cmdSession(a, b, c)
       break
     case 'learn':
       if (!a) usage()
@@ -318,6 +371,8 @@ function usage(): never {
       '  signet init [--force]    create custody (genesis DID + passphrase) and publish\n' +
       '  signet push <dir>        encrypt + upload changed entries from <dir>\n' +
       '  signet pull <dir>        verify + download + decrypt into <dir>\n' +
+      '  signet session push <id> <dir>   mirror a session dir as chunked entries\n' +
+      '  signet session pull <id> <dir>   reassemble a mirrored session into <dir>\n' +
       '  signet learn <file>      distill session content into memory/ entries\n' +
       '  signet export <file>     write an encrypted custody bundle\n' +
       '  signet import <file>     restore custody from a bundle [--force]\n' +
