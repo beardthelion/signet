@@ -216,7 +216,12 @@ total loss by design; there is no recovery path in this version.
 - **SN-120.** Memory entries carry YAML frontmatter with `type:` and
   `provenance:`. Learning-captured entries additionally carry
   `learned:<harness>`. Entries written by the conformance suite carry
-  `provenance: spec/vector`.
+  `provenance: spec/vector`. A `type: project` entry MAY carry `scope:`:
+  the basename of the workspace root it was learned in. Scope is ambient
+  context the writer injects, never caller-controlled learning input.
+  A consumer that knows its ambient workspace SHOULD prefer scoped
+  entries matching it and treat foreign-scoped project entries as
+  other-workspace facts rather than local conventions.
 
 ## 7. Wire protocol
 
