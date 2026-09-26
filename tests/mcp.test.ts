@@ -156,7 +156,7 @@ function makeStub() {
 
 const PASS = 'mcp test passphrase'
 
-function rig() {
+function rig(opts: { workspaceScope?: string } = {}) {
   const stub = makeStub()
   const id = generateIdentity()
   const client = new SignetClient({
@@ -171,6 +171,7 @@ function rig() {
     onSync: () => {
       synced.push(client.manifestSeq)
     },
+    ...(opts.workspaceScope ? { workspaceScope: opts.workspaceScope } : {}),
   })
   return { stub, id, client, tools, synced }
 }
@@ -443,6 +444,63 @@ describe('grant tools', () => {
     for (const name of Object.keys(tools)) {
       expect(name).not.toMatch(/apply|honor|enforce|consume|activate/i)
     }
+  })
+})
+
+// ─── Scope-aware recall ────────────────────────────────────────────────
+
+describe('scope-aware recall', () => {
+  const scopedEntry = (scope: string) =>
+    `---\ntype: project\nprovenance: learned:fx\ndescription: package manager choice\nscope: ${scope}\n---\n\nThis project uses pnpm for package management.\n`
+  const globalEntry =
+    '---\ntype: user\nprovenance: learned:fx\ndescription: editor preference\n---\n\nThe user prefers minimal diffs.\n'
+
+  test('recall excludes project entries scoped to another workspace', async () => {
+    const { tools } = rig({ workspaceScope: 'repo-a' })
+    await tools.save('memory/project/pnpm-here.md', scopedEntry('repo-a'))
+    await tools.save('memory/project/pnpm-elsewhere.md', scopedEntry('repo-b'))
+    await tools.save('memory/user/diffs.md', globalEntry)
+
+    const r = await tools.recall('package manager pnpm')
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('pnpm-here')
+    expect(r.text).not.toContain('pnpm-elsewhere')
+    expect(r.text).toContain('1 project entry scoped to other workspaces skipped')
+  })
+
+  test('no workspace scope means no filtering', async () => {
+    const { tools } = rig()
+    await tools.save('memory/project/pnpm-here.md', scopedEntry('repo-a'))
+    await tools.save('memory/project/pnpm-elsewhere.md', scopedEntry('repo-b'))
+
+    const r = await tools.recall('package manager pnpm')
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('pnpm-here')
+    expect(r.text).toContain('pnpm-elsewhere')
+  })
+
+  test('unscoped project entries still recall; get fetches a foreign one directly', async () => {
+    const { tools } = rig({ workspaceScope: 'repo-a' })
+    const unscoped = scopedEntry('repo-a').replace('scope: repo-a\n', '')
+    await tools.save('memory/project/unscoped.md', unscoped)
+    await tools.save('memory/project/pnpm-elsewhere.md', scopedEntry('repo-b'))
+
+    const r = await tools.recall('package manager pnpm')
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('unscoped')
+
+    const got = await tools.get('memory/project/pnpm-elsewhere.md')
+    expect(got.isError).toBeUndefined()
+    expect(got.text).toContain('pnpm')
+  })
+
+  test('when everything is foreign-scoped, recall says so', async () => {
+    const { tools } = rig({ workspaceScope: 'repo-a' })
+    await tools.save('memory/project/pnpm-elsewhere.md', scopedEntry('repo-b'))
+
+    const r = await tools.recall('package manager pnpm')
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('scoped to other workspaces')
   })
 })
 

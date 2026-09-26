@@ -41,7 +41,7 @@ import {
   SignetMirrorOversize,
 } from '../client/session_mirror.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
-import { rankEntries } from './relevance.ts'
+import { frontmatterScope, rankEntries } from './relevance.ts'
 
 export type ToolResult = { text: string; isError?: boolean }
 
@@ -72,6 +72,13 @@ export type ToolOptions = {
    * custody, outside this process's memory).
    */
   onSync?: () => void | Promise<void>
+  /**
+   * The workspace basename this process serves (the harness's cwd by
+   * default). recall excludes `memory/project/*` entries whose scope:
+   * field names a different workspace: a learning scoped to another repo
+   * is a wrong-repo fact here, not a relevant one. Unset = no filtering.
+   */
+  workspaceScope?: string
 }
 
 const ok = (text: string): ToolResult => ({ text })
@@ -257,9 +264,36 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
       try {
         const entries = await pullUserEntries()
         if (Object.keys(entries).length === 0) return ok('(the signet is empty)')
-        const ranked = rankEntries(query, entries, limit)
+        // Project learnings scoped to another workspace are wrong-repo
+        // facts here: rank against the rest and report the exclusion so
+        // the model can still signet_get one deliberately.
+        let pool = entries
+        let foreignCount = 0
+        if (opts.workspaceScope) {
+          pool = {}
+          for (const [key, content] of Object.entries(entries)) {
+            const scope = key.startsWith('memory/project/') ? frontmatterScope(content) : null
+            if (scope !== null && scope !== opts.workspaceScope) {
+              foreignCount++
+              continue
+            }
+            pool[key] = content
+          }
+        }
+        if (Object.keys(pool).length === 0) {
+          return ok(
+            `(everything in the signet is scoped to other workspaces: ${foreignCount} entr${foreignCount === 1 ? 'y' : 'ies'})`,
+          )
+        }
+        const ranked = rankEntries(query, pool, limit)
         if (ranked.length === 0) {
-          return ok(`(nothing in the signet looks relevant to "${bounded(query, 120)}")`)
+          const scopeNote =
+            foreignCount > 0
+              ? ` (${foreignCount} project entr${foreignCount === 1 ? 'y' : 'ies'} scoped to other workspaces not considered; fetch one by key with signet_get if you actually need it)`
+              : ''
+          return ok(
+            `(nothing in the signet looks relevant to "${bounded(query, 120)}")${scopeNote}`,
+          )
         }
         // Entries can be arbitrarily large; each is capped and the whole
         // answer carries a total budget so recall cannot flood the context.
@@ -280,10 +314,16 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
           parts.push(block)
           budget -= block.length
         }
-        const trailer =
-          dropped > 0
-            ? `\n\n(${dropped} more relevant entr${dropped === 1 ? 'y' : 'ies'} not shown)`
-            : ''
+        const trailers: string[] = []
+        if (dropped > 0) {
+          trailers.push(`${dropped} more relevant entr${dropped === 1 ? 'y' : 'ies'} not shown`)
+        }
+        if (foreignCount > 0) {
+          trailers.push(
+            `${foreignCount} project entr${foreignCount === 1 ? 'y' : 'ies'} scoped to other workspaces skipped`,
+          )
+        }
+        const trailer = trailers.length > 0 ? `\n\n(${trailers.join('; ')})` : ''
         return ok(
           `${parts.length} relevant entr${parts.length === 1 ? 'y' : 'ies'}:\n\n${parts.join('\n\n')}${trailer}`,
         )

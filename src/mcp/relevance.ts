@@ -32,6 +32,18 @@ function frontmatterDescription(content: string): string {
 }
 
 /**
+ * Pull the `scope:` value out of YAML-ish frontmatter. Project learnings
+ * carry it (the workspace basename they were learned in); anything else
+ * is treated as unscoped.
+ */
+export function frontmatterScope(content: string): string | null {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content)
+  if (!m) return null
+  const s = /^scope:\s*(.+?)\s*$/im.exec(m[1])
+  return s ? s[1] : null
+}
+
+/**
  * Rank entries (entryKey -> plaintext) against a query. Returns the top `limit`
  * by score, highest first; entries with no query-term overlap are dropped.
  */

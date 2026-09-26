@@ -10,7 +10,9 @@
  *
  * Config (env): SIGNET_URL (default http://localhost:8080),
  * SIGNET_HOME (custody dir), SIGNET_PASSPHRASE (optional override),
- * SIGNET_SCAN (block|warn|off).
+ * SIGNET_SCAN (block|warn|off), SIGNET_WORKSPACE_SCOPE (optional override
+ * for the workspace scope recall filters project learnings by; defaults
+ * to the basename of the cwd the harness spawned this server in).
  *
  * IMPORTANT: stdout is the MCP protocol channel - never write logs there.
  * All diagnostics go to stderr, and nothing here runs on import: the CLI
@@ -18,6 +20,7 @@
  * transport exists and never half-serves.
  */
 
+import { basename } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
@@ -57,6 +60,10 @@ export async function main(): Promise<void> {
     // Persist the manifest seq after every write so the next process still
     // rejects a rolled-back manifest (SN-041 state lives in custody).
     onSync: () => persistManifestSeq(client, secrets),
+    // A stdio server inherits the harness's workspace cwd; its basename is
+    // the ambient scope project learnings get filtered by. An explicit env
+    // override wins for harnesses that spawn the server from elsewhere.
+    workspaceScope: process.env.SIGNET_WORKSPACE_SCOPE || basename(process.cwd()) || undefined,
   })
 
   const server = new McpServer(
@@ -100,7 +107,7 @@ export async function main(): Promise<void> {
     {
       title: 'Recall relevant entries',
       description:
-        'Return the signet entries most relevant to a natural-language query, ranked. Call this before asking the user things a previous session may already know.',
+        'Return the signet entries most relevant to a natural-language query, ranked. Project learnings scoped to a different workspace are excluded (they are other-repo facts here). Call this before asking the user things a previous session may already know.',
       inputSchema: {
         query: z.string().describe('What you want to remember about.'),
         limit: z.number().int().min(1).max(20).optional().describe('Max results (default 5).'),

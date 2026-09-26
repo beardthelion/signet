@@ -32,6 +32,9 @@ only ever holds ciphertext; decryption happens locally, inside this server.
 - signet_recall(query, limit?) - ranked retrieval: the entries most
   relevant to a natural-language query. Call this at the start of a task
   before asking the user things they may have already told a previous session.
+  memory/project/ entries carry a scope: field (the workspace they were
+  learned in); recall skips ones scoped to a different workspace and says
+  how many it skipped, so a fact never recalls into the wrong repo.
 - signet_search(query) - literal substring search over keys and content.
 - signet_list(section?) - entry keys only, no content.
 - signet_delete(key) - remove one entry. Destructive and explicit: the full
