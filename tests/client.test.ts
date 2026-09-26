@@ -805,6 +805,40 @@ describe('session mirroring (SN-022)', () => {
     expect(r.uploaded.length).toBeGreaterThan(0)
   })
 
+  test('a displaced file re-uploads at its new region (packed-index migration)', async () => {
+    const { mirrorSession, hydrateSession } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+
+    // An index in the old packed layout: every record at first=1,2,3
+    // with stride 1. Re-mirroring must move these files into cap-sized
+    // regions and re-upload the displaced chunks - not mark them
+    // unchanged and leave the new seqs unwritten.
+    const files = {
+      'authority.json': '{"a":1}\n',
+      'events.jsonl': '{"e":1}\n',
+      'session.json': '{"s":1}\n',
+    }
+    const sha = (s: string) => createHash('sha256').update(s).digest('hex')
+    const packed = {
+      'sessions/mig/000000':
+        `{"v":2,"files":[` +
+        `{"name":"authority.json","first":1,"chunks":1,"bytes":8,"sha256":"${sha(files['authority.json'])}"},` +
+        `{"name":"events.jsonl","first":2,"chunks":1,"bytes":8,"sha256":"${sha(files['events.jsonl'])}"},` +
+        `{"name":"session.json","first":3,"chunks":1,"bytes":8,"sha256":"${sha(files['session.json'])}"}]}`,
+      'sessions/mig/000001': files['authority.json'],
+      'sessions/mig/000002': files['events.jsonl'],
+      'sessions/mig/000003': files['session.json'],
+    }
+    await client.push(packed)
+
+    await mirrorSession(client, 'mig', files)
+    const back = await hydrateSession(client, 'mig')
+    expect(back).toEqual(files)
+  })
+
   test('hydrate rejects an index naming a non-mirrored member', async () => {
     const { hydrateSession, SignetMirrorCorrupt } = await import('../src/client/session_mirror.ts')
     const stub = makeStub()

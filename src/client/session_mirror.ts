@@ -283,6 +283,7 @@ export async function mirrorSession(
     records.push(record)
     const unchanged =
       priorRec !== undefined &&
+      priorRec.first === record.first &&
       priorRec.chunks === record.chunks &&
       priorRec.bytes === record.bytes &&
       priorRec.sha256 === record.sha256
