@@ -92,6 +92,13 @@ export const IntegrityManifest = z.object({
   specVersion: z.string().min(1),
   genesisDid: DidKey,
   entries: z.record(z.string(), ContentHash),
+  /**
+   * Deletion markers, entryKey -> manifest seq the deletion was recorded at.
+   * Optional: manifests written before tombstones carry no field and read
+   * as empty. A writer whose intent-base predates a tombstone's seq loses
+   * to it (SN-084); a writer who saw the deletion may re-add.
+   */
+  tombstones: z.record(z.string(), z.number().int().positive()).optional(),
 })
 export type IntegrityManifest = z.infer<typeof IntegrityManifest>
 

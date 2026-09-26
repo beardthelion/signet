@@ -221,6 +221,11 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
       try {
         const r = await client.push({ [key]: content })
         await sync()
+        if (r.tombstoned.includes(key)) {
+          return ok(
+            `not saved: "${key}" was deleted after this session last read the signet, and the deletion outranks this write (SN-084). Re-read the signet and save again to deliberately restore it.`,
+          )
+        }
         const status = r.uploaded.includes(key)
           ? 'saved'
           : r.unchanged.includes(key)

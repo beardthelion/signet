@@ -60,6 +60,16 @@
     { "id": "SN-080", "title": "manifest+blobs delta sync", "check": "checkDeltaSync" },
     { "id": "SN-081", "title": "caps all-or-nothing, skipped not dropped", "check": "checkCaps" },
     { "id": "SN-082", "title": "per-namespace locking", "check": "checkNamespaceLock" },
+    {
+      "id": "SN-083",
+      "title": "stale-base 409 carries current base, rebase merges",
+      "check": "checkStaleBaseRebase"
+    },
+    {
+      "id": "SN-084",
+      "title": "manifest tombstones record deletion seq",
+      "check": "checkTombstones"
+    },
     { "id": "SN-090", "title": "DID bearer auth, 401/403, replay", "check": "checkAuth" },
     {
       "id": "SN-091",

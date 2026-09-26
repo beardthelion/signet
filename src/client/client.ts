@@ -50,6 +50,9 @@ import { enforce, type Finding, type ScanMode } from './secretscan.ts'
 
 const SPEC_VERSION = 'signet-spec/0.1'
 
+/** Upper bound on deletion tombstones retained in the manifest (SN-084). */
+const TOMBSTONE_CAP = 512
+
 /** The entry carrying the signed integrity manifest (SN-040). */
 export const MANIFEST_ENTRY_KEY = 'identity/manifest.json'
 
@@ -119,6 +122,11 @@ export type PushResult = {
   uploaded: string[]
   unchanged: string[]
   deleted: string[]
+  /**
+   * Writes skipped because a deletion tombstone recorded after this push's
+   * intent-base outranks them (SN-084). Re-read and re-add to override.
+   */
+  tombstoned: string[]
 }
 
 /** A refusal from the server, carrying its error code and details verbatim. */
@@ -421,10 +429,15 @@ export class SignetClient {
         `signet: manifest signed by ${signed.did}, which held no authority for this signet`,
       )
     }
-    if (!verifyDidSignature(signed.did, canonicalJson(signed.manifest), signed.sig)) {
+    // The signature is verified over the canonical form of the RAW manifest
+    // value, not the schema-parsed object: a field a newer spec adds must
+    // survive into the signed bytes or every older reader would reject the
+    // manifest outright. Schema stripping stays useful for field access.
+    const rawManifest = (parsedJson as { manifest?: unknown }).manifest
+    const canonical = canonicalJson(rawManifest)
+    if (!verifyDidSignature(signed.did, canonical, signed.sig)) {
       throw new SignetIntegrityError('signet: integrity manifest signature is invalid')
     }
-    const canonical = canonicalJson(signed.manifest)
     const seq = signed.manifest.seq
     if (seq < this.lastSeq) {
       throw new SignetIntegrityError(`signet: manifest seq rolled back (${seq} < ${this.lastSeq})`)
@@ -450,12 +463,14 @@ export class SignetClient {
   private signManifest(
     entries: Record<string, string>,
     seq: number,
+    tombstones?: Record<string, number>,
   ): { plaintext: string; canonical: string } {
     const manifest = {
       seq,
       specVersion: SPEC_VERSION,
       genesisDid: this.genesisDid,
       entries,
+      ...(tombstones && Object.keys(tombstones).length ? { tombstones } : {}),
     }
     const signed: SignedManifest = {
       manifest,
@@ -530,107 +545,159 @@ export class SignetClient {
       else console.warn(`[signet] ${findings.length} potential secret(s) in pushed entries`)
     }
 
-    const [hashes, remote] = await Promise.all([this.hashesView(), this.remoteManifest()])
-    if (remote) this.adoptManifest(remote)
-    const baseSeq = remote?.seq ?? 0
-
-    // The VERIFIED manifest is the only trusted map of what the store holds.
-    // The unsigned hashes view is a hint for the base precondition and delta
-    // detection; if its key set disagrees with the verified manifest the
-    // store is lying to one of the two views, and signing its version of the
-    // world into the next manifest would sign in entries the holder never
-    // wrote. Fail closed (SN-041).
-    const remoteEntries = remote?.signed.manifest.entries ?? {}
-    const viewKeys = Object.keys(hashes ?? {}).filter(k => k !== MANIFEST_ENTRY_KEY)
-    if (
-      viewKeys.length !== Object.keys(remoteEntries).length ||
-      viewKeys.some(k => !(k in remoteEntries))
-    ) {
-      throw new SignetIntegrityError(
-        'signet: the unsigned hashes view disagrees with the verified integrity manifest',
-      )
-    }
-
     const deletions = (opts?.deletions ?? []).filter(k => k !== MANIFEST_ENTRY_KEY)
     const deletionSet = new Set(deletions)
-    const toUpload: Record<string, string> = {}
-    const uploaded: string[] = []
-    const unchanged: string[] = []
-    // The next manifest's entry map starts from the verified manifest's
-    // entries - never from the unsigned view.
-    const nextHashes: Record<string, string> = { ...remoteEntries }
-    for (const k of deletions) delete nextHashes[k]
 
-    for (const [entryKey, plaintext] of Object.entries(userEntries)) {
-      const b64 = encryptEntry(this.encKey, entryKey, plaintext)
-      const hash = ciphertextHash(b64)
-      if (!deletionSet.has(entryKey) && remoteEntries[entryKey] === hash) {
-        unchanged.push(entryKey)
-        continue
+    // Causal base for tombstone checks: the seq this push was issued
+    // against. Across stale-base retries the remote advances but the
+    // caller's intent was formed here, so a deletion recorded after this
+    // point still outranks these writes (SN-084).
+    let intentBase = -1
+
+    // Concurrent writers: a 409 means the manifest moved under this push,
+    // so re-read, re-merge the caller's delta onto the new base, and retry,
+    // bounded so a contested namespace cannot spin forever (SN-083).
+    const maxAttempts = 4
+    for (let attempt = 1; ; attempt++) {
+      const [hashes, remote] = await Promise.all([this.hashesView(), this.remoteManifest()])
+      if (remote) this.adoptManifest(remote)
+      const baseSeq = remote?.seq ?? 0
+      if (intentBase < 0) intentBase = baseSeq
+
+      // The VERIFIED manifest is the only trusted map of what the store holds.
+      // The unsigned hashes view is a hint for the base precondition and delta
+      // detection; if its key set disagrees with the verified manifest the
+      // store is lying to one of the two views, and signing its version of the
+      // world into the next manifest would sign in entries the holder never
+      // wrote. Fail closed (SN-041).
+      const remoteEntries = remote?.signed.manifest.entries ?? {}
+      const viewKeys = Object.keys(hashes ?? {}).filter(k => k !== MANIFEST_ENTRY_KEY)
+      if (
+        viewKeys.length !== Object.keys(remoteEntries).length ||
+        viewKeys.some(k => !(k in remoteEntries))
+      ) {
+        throw new SignetIntegrityError(
+          'signet: the unsigned hashes view disagrees with the verified integrity manifest',
+        )
       }
-      nextHashes[entryKey] = hash
-      toUpload[entryKey] = b64
-      uploaded.push(entryKey)
-    }
 
-    const changed = uploaded.length > 0 || deletions.some(k => remoteEntries[k] !== undefined)
-    if (!changed) {
-      return { namespace: this.namespace, seq: baseSeq, uploaded, unchanged, deleted: [] }
-    }
+      const remoteTombstones = remote?.signed.manifest.tombstones ?? {}
+      const toUpload: Record<string, string> = {}
+      const uploaded: string[] = []
+      const unchanged: string[] = []
+      const tombstoned: string[] = []
+      // The next manifest's entry map starts from the verified manifest's
+      // entries - never from the unsigned view.
+      const nextHashes: Record<string, string> = { ...remoteEntries }
+      for (const k of deletions) delete nextHashes[k]
 
-    const seq = baseSeq + 1
-    const { plaintext: manifestPlaintext, canonical: manifestCanonical } = this.signManifest(
-      nextHashes,
-      seq,
-    )
-    toUpload[MANIFEST_ENTRY_KEY] = encryptEntry(this.encKey, MANIFEST_ENTRY_KEY, manifestPlaintext)
-    uploaded.push(MANIFEST_ENTRY_KEY)
+      for (const [entryKey, plaintext] of Object.entries(userEntries)) {
+        // A deletion tombstoned after this push's intent-base outranks the
+        // write: the caller could not have seen the delete when it formed
+        // its intent. A writer whose base includes the tombstone may re-add.
+        const tombstone = remoteTombstones[entryKey]
+        if (tombstone !== undefined && tombstone > intentBase) {
+          tombstoned.push(entryKey)
+          continue
+        }
+        const b64 = encryptEntry(this.encKey, entryKey, plaintext)
+        const hash = ciphertextHash(b64)
+        if (!deletionSet.has(entryKey) && remoteEntries[entryKey] === hash) {
+          unchanged.push(entryKey)
+          continue
+        }
+        nextHashes[entryKey] = hash
+        toUpload[entryKey] = b64
+        uploaded.push(entryKey)
+      }
 
-    const res = await this.request('PUT', this.endpoint(), {
-      body: {
-        base: hashes === null ? null : manifestHash(hashes),
-        entries: toUpload,
-        ...(deletions.length ? { deletions } : {}),
-      },
-    })
-    if (!res.ok) throw httpError(res)
-    const result = JSON.parse(res.raw) as {
-      base?: string
-      accepted?: string[]
-      deleted?: string[]
-      skipped?: { key: string; reason: string }[]
-    }
-    const skipped = result.skipped ?? []
-    if (skipped.length) {
-      // Entries the store refused must not stay named in the manifest this
-      // push just published, or every later pull would fetch-and-fail on
-      // blobs that never landed. Publish a corrected manifest over the
-      // entries that were actually accepted, then surface the refusal.
-      // lastSeq/lastManifestCanonical stay at the adopted remote state: the
-      // corrected manifest's bytes are not the ones this client signed
-      // optimistically, so the SN-041 same-seq pin must not record them.
-      const repaired: Record<string, string> = { ...nextHashes }
-      for (const s of skipped) delete repaired[s.key]
-      const fix = this.signManifest(repaired, seq)
-      const fixRes = await this.request('PUT', this.endpoint(), {
+      const seq = baseSeq + 1
+      // New tombstones record the seq their deletion publishes at.
+      const nextTombstones: Record<string, number> = { ...remoteTombstones }
+      for (const k of deletions) {
+        if (remoteEntries[k] !== undefined) nextTombstones[k] = seq
+      }
+      // Bounded: keep the newest markers so the field cannot grow forever.
+      const tombKeys = Object.keys(nextTombstones).sort(
+        (a, b) => nextTombstones[b]! - nextTombstones[a]!,
+      )
+      for (const k of tombKeys.slice(TOMBSTONE_CAP)) delete nextTombstones[k]
+      const tombstones = Object.keys(nextTombstones).length ? nextTombstones : undefined
+
+      const changed = uploaded.length > 0 || deletions.some(k => remoteEntries[k] !== undefined)
+      if (!changed) {
+        return {
+          namespace: this.namespace,
+          seq: baseSeq,
+          uploaded,
+          unchanged,
+          deleted: [],
+          tombstoned,
+        }
+      }
+
+      const { plaintext: manifestPlaintext, canonical: manifestCanonical } = this.signManifest(
+        nextHashes,
+        seq,
+        tombstones,
+      )
+      toUpload[MANIFEST_ENTRY_KEY] = encryptEntry(
+        this.encKey,
+        MANIFEST_ENTRY_KEY,
+        manifestPlaintext,
+      )
+      uploaded.push(MANIFEST_ENTRY_KEY)
+
+      const res = await this.request('PUT', this.endpoint(), {
         body: {
-          ...(typeof result.base === 'string' ? { base: result.base } : {}),
-          entries: {
-            [MANIFEST_ENTRY_KEY]: encryptEntry(this.encKey, MANIFEST_ENTRY_KEY, fix.plaintext),
-          },
+          base: hashes === null ? null : manifestHash(hashes),
+          entries: toUpload,
+          ...(deletions.length ? { deletions } : {}),
         },
       })
-      if (!fixRes.ok) throw httpError(fixRes)
-      throw new SignetSkippedError(skipped, result.accepted ?? [])
-    }
-    this.lastSeq = seq
-    this.lastManifestCanonical = manifestCanonical
-    return {
-      namespace: this.namespace,
-      seq,
-      uploaded,
-      unchanged,
-      deleted: result.deleted ?? [],
+      if (!res.ok) {
+        if (res.status === 409 && attempt < maxAttempts) continue
+        throw httpError(res)
+      }
+      const result = JSON.parse(res.raw) as {
+        base?: string
+        accepted?: string[]
+        deleted?: string[]
+        skipped?: { key: string; reason: string }[]
+      }
+      const skipped = result.skipped ?? []
+      if (skipped.length) {
+        // Entries the store refused must not stay named in the manifest this
+        // push just published, or every later pull would fetch-and-fail on
+        // blobs that never landed. Publish a corrected manifest over the
+        // entries that were actually accepted, then surface the refusal.
+        // lastSeq/lastManifestCanonical stay at the adopted remote state: the
+        // corrected manifest's bytes are not the ones this client signed
+        // optimistically, so the SN-041 same-seq pin must not record them.
+        const repaired: Record<string, string> = { ...nextHashes }
+        for (const s of skipped) delete repaired[s.key]
+        const fix = this.signManifest(repaired, seq, tombstones)
+        const fixRes = await this.request('PUT', this.endpoint(), {
+          body: {
+            ...(typeof result.base === 'string' ? { base: result.base } : {}),
+            entries: {
+              [MANIFEST_ENTRY_KEY]: encryptEntry(this.encKey, MANIFEST_ENTRY_KEY, fix.plaintext),
+            },
+          },
+        })
+        if (!fixRes.ok) throw httpError(fixRes)
+        throw new SignetSkippedError(skipped, result.accepted ?? [])
+      }
+      this.lastSeq = seq
+      this.lastManifestCanonical = manifestCanonical
+      return {
+        namespace: this.namespace,
+        seq,
+        uploaded,
+        unchanged,
+        deleted: result.deleted ?? [],
+        tombstoned,
+      }
     }
   }
 

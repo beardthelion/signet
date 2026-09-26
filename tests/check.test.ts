@@ -74,7 +74,7 @@ describe('the checker against a conformant stub', () => {
 describe('fault stubs fail exactly the violated clauses', () => {
   const cases: { faults: StubFaults; expected: string[] }[] = [
     { faults: { skipAuth: true }, expected: ['SN-090'] },
-    { faults: { acceptStaleBase: true }, expected: ['SN-081'] },
+    { faults: { acceptStaleBase: true }, expected: ['SN-081', 'SN-083'] },
     { faults: { allowTraversal: true }, expected: ['SN-021'] },
     { faults: { leakAccessLog: true }, expected: ['SN-034'] },
     // Trusting any chain breaks both the verify-time rejection rules

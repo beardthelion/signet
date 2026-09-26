@@ -123,6 +123,8 @@ function makeStub() {
   const chains = new Map<string, RotationAttestation[]>() // genesisDid -> chain
   let counter = 0
   let failNextPut = false
+  let failAllPuts = false
+  let onTrip: (() => void | Promise<void>) | null = null
 
   const entryRead = (ns: string, key: string): Response => {
     const m = manifests.get(ns)
@@ -199,8 +201,9 @@ function makeStub() {
     }
 
     if (method === 'PUT' && entryKey === null) {
-      if (failNextPut) {
+      if (failNextPut || failAllPuts) {
         failNextPut = false
+        await onTrip?.()
         return apiError('stale_base', 409, { current: 'sha256:0' })
       }
       const m = manifests.get(ns) ?? new Map<string, { hash: string; size: number }>()
@@ -256,9 +259,14 @@ function makeStub() {
     blobs,
     /** The live token map - tests clear it to force a 401/re-auth. */
     tokens,
-    /** Force the next PUT to answer 409 stale_base. */
-    tripNextPut: () => {
+    /** Force the next PUT to answer 409 stale_base; `effect` runs as it fires. */
+    tripNextPut: (effect?: () => void | Promise<void>) => {
       failNextPut = true
+      onTrip = effect ?? null
+    },
+    /** Force EVERY PUT to answer 409 stale_base (retry exhaustion). */
+    tripAllPuts: () => {
+      failAllPuts = true
     },
     /** Point the manifest entry at different stored bytes (tamper). */
     repointEntry(ns: string, key: string, hash: string) {
@@ -507,12 +515,24 @@ describe('wire failures surface honestly', () => {
     expect('memory/big.md' in manifest.manifest.entries).toBe(false)
   })
 
-  test('a stale base surfaces as a 409 error with the current base', async () => {
+  test('a stale base rebases and commits transparently (SN-083)', async () => {
     const stub = makeStub()
     const id = generateIdentity()
     const client = clientFor(stub, id)
     await client.push({ 'memory/a.md': 'v1\n' })
     stub.tripNextPut()
+    const r = await client.push({ 'memory/a.md': 'v2\n' })
+    expect(r.uploaded).toContain('memory/a.md')
+    const out = await client.pull()
+    expect(out.entries['memory/a.md']).toBe('v2\n')
+  })
+
+  test('a persistently stale base exhausts bounded retries and surfaces 409', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.push({ 'memory/a.md': 'v1\n' })
+    stub.tripAllPuts()
     try {
       await client.push({ 'memory/a.md': 'v2\n' })
       expect.unreachable('push should have thrown')
@@ -521,6 +541,54 @@ describe('wire failures surface honestly', () => {
       expect((err as SignetHttpError).status).toBe(409)
       expect((err as SignetHttpError).code).toBe('stale_base')
     }
+  })
+
+  test('concurrent pushes on different keys merge through rebase', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const a = clientFor(stub, id)
+    const b = clientFor(stub, id)
+    await a.push({ 'memory/a.md': 'from a\n' })
+    // B writes on what becomes a stale base the moment A's commit lands.
+    stub.tripNextPut(async () => {
+      await a.push({ 'memory/b.md': 'from a too\n' })
+    })
+    const rb = await b.push({ 'memory/c.md': 'from b\n' })
+    expect(rb.uploaded).toContain('memory/c.md')
+    const out = await b.pull()
+    expect(out.entries['memory/a.md']).toBe('from a\n')
+    expect(out.entries['memory/b.md']).toBe('from a too\n')
+    expect(out.entries['memory/c.md']).toBe('from b\n')
+  })
+
+  test('a deletion tombstone outranks a write issued before it (SN-084)', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const a = clientFor(stub, id)
+    const b = clientFor(stub, id)
+    await a.push({ 'memory/x.md': 'lives\n' })
+    // B's re-write forms on the pre-delete base; A's delete lands mid-push.
+    stub.tripNextPut(async () => {
+      await a.push({}, { deletions: ['memory/x.md'] })
+    })
+    const r = await b.push({ 'memory/x.md': 'resurrected\n' })
+    expect(r.tombstoned).toContain('memory/x.md')
+    const out = await b.pull()
+    expect(out.entries['memory/x.md']).toBeUndefined()
+  })
+
+  test('a writer who saw the deletion may deliberately re-add (SN-084)', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const a = clientFor(stub, id)
+    await a.push({ 'memory/x.md': 'lives\n' })
+    const r1 = await a.push({}, { deletions: ['memory/x.md'] })
+    expect(r1.deleted).toContain('memory/x.md')
+    // Fresh push, post-delete base: the tombstone is behind this intent.
+    const r2 = await a.push({ 'memory/x.md': 'brought back\n' })
+    expect(r2.tombstoned).toHaveLength(0)
+    const out = await a.pull()
+    expect(out.entries['memory/x.md']).toBe('brought back\n')
   })
 
   test('401 -> re-auth + retry is transparent', async () => {

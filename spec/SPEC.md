@@ -269,6 +269,19 @@ under `/signet/` whose percent-encoding cannot be decoded is a **400**
   returns 409 with no partial commit.
 - **SN-082.** Per-namespace locking serializes the read-modify-write so
   concurrent PUTs cannot clobber the manifest.
+- **SN-083.** A `409 stale_base` response means another writer committed
+  between this client's read and its write. The client MUST re-read the
+  verified manifest, re-apply its delta onto the new base, and retry, with a
+  bounded attempt count (4). Concurrent pushes on disjoint keys merge this
+  way.
+- **SN-084.** Deletions publish manifest-level tombstones:
+  `tombstones: {entryKey: seq}` inside the signed manifest, recording the
+  seq at which each key was deleted. A write whose push was issued before
+  the tombstone's seq loses to it (the deleted key stays deleted); a writer
+  whose base includes the tombstone may deliberately re-add. Tombstones are
+  optional in the schema, bounded (512 newest), and older readers ignore
+  them; manifest signatures canonicalize the raw manifest value so added
+  fields stay forward-compatible.
 
 ## 8. Conformance
 

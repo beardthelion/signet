@@ -1193,6 +1193,83 @@ const checkNamespaceLock: CheckFn = async ctx => {
   return verdict(problems)
 }
 
+/** SN-083 - a write on a stale base is refused with a 409 that carries the
+ *  current base hash, and a write rebased onto it merges rather than
+ *  clobbering. This is the wire contract the client's bounded rebase loop
+ *  exercises; the loop's retries and tombstone interplay are unit-tested. */
+const checkStaleBaseRebase: CheckFn = async ctx => {
+  const problems: string[] = []
+  const s = await ctx.provision()
+  const put = await s.client.push({ 'memory/base.md': 'v1\n' })
+  if (!put.uploaded.includes('memory/base.md')) {
+    problems.push('provisioned write did not land')
+  }
+  const stale = await ctx.wire('PUT', nsPath(s.namespace), {
+    token: s.token,
+    body: { base: null, entries: { 'memory/stale.md': b64('stale\n') } },
+  })
+  if (stale.status !== 409) {
+    problems.push(`stale-base write answered ${stale.status}, expected 409`)
+    return verdict(problems)
+  }
+  const body = (await stale.json().catch(() => ({}))) as {
+    error?: { code?: string; details?: { current?: string } }
+  }
+  if (body.error?.code !== 'stale_base') {
+    problems.push(`stale-base refusal carried code ${JSON.stringify(body.error?.code)}`)
+  }
+  const current = body.error?.details?.current
+  if (typeof current !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(current)) {
+    problems.push('409 response carries no usable `current` base for rebasing')
+    return verdict(problems)
+  }
+  const rebased = await ctx.wire('PUT', nsPath(s.namespace), {
+    token: s.token,
+    body: { base: current, entries: { 'memory/rebased.md': b64('rebased\n') } },
+  })
+  if (rebased.status !== 200) {
+    problems.push(`write rebased onto the returned base answered ${rebased.status}`)
+  }
+  const hashes = (await hashesView(ctx, s)) ?? {}
+  if (!('memory/base.md' in hashes)) problems.push("rebase lost the prior writer's entry")
+  if (!('memory/rebased.md' in hashes)) problems.push('rebased entry is not committed')
+  return verdict(problems, 'stale base refused with current base; rebase write merged')
+}
+
+/** SN-084 - deletions publish tombstones inside the signed manifest,
+ *  recording the seq at which each key was deleted, and the deleted entry
+ *  leaves the hash view. Causal precedence and the 512-marker cap are
+ *  unit-tested; this checks the published artifact. */
+const checkTombstones: CheckFn = async ctx => {
+  const problems: string[] = []
+  const s = await ctx.provision()
+  await s.client.push({ 'memory/gone.md': 'soon deleted\n' })
+  const del = await s.client.push({}, { deletions: ['memory/gone.md'] })
+  const pulled = await s.client.pull()
+  const raw = pulled.entries[MANIFEST_ENTRY_KEY]
+  if (typeof raw !== 'string') {
+    problems.push('pulled manifest entry missing')
+    return verdict(problems)
+  }
+  const signed = SignedManifest.safeParse(JSON.parse(raw))
+  if (!signed.success) {
+    problems.push('pulled manifest fails the signed-manifest schema')
+    return verdict(problems)
+  }
+  const tombstones = signed.data.manifest.tombstones ?? {}
+  if (tombstones['memory/gone.md'] !== del.seq) {
+    problems.push(
+      `tombstone for memory/gone.md is ${JSON.stringify(tombstones['memory/gone.md'])}, expected seq ${del.seq}`,
+    )
+  }
+  if ('memory/gone.md' in signed.data.manifest.entries) {
+    problems.push('deleted entry still listed in the manifest')
+  }
+  const hashes = (await hashesView(ctx, s)) ?? {}
+  if ('memory/gone.md' in hashes) problems.push('deleted entry still in the hashes view')
+  return verdict(problems, 'tombstone published at the deletion seq; entry removed')
+}
+
 /** SN-090 - bearer auth bound to an authorized DID: 401 unauthenticated,
  *  403 wrong DID, replayed nonces rejected. */
 const checkAuth: CheckFn = async ctx => {
@@ -1582,6 +1659,8 @@ export const checks: Record<string, CheckFn> = {
   checkDeltaSync,
   checkCaps,
   checkNamespaceLock,
+  checkStaleBaseRebase,
+  checkTombstones,
   checkAuth,
   checkBindPolicy,
   checkLocalMode,
