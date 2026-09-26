@@ -62,5 +62,16 @@ bun run type-check    # tsc --noEmit
 bunx biome ci         # lint + format check
 ```
 
-The companion consumer is the `beardthelion/fx` fork, which gains a signet
-state layer under `src/core/signet/` and passes the same `spec/vectors/`.
+## Two ways to consume a signet
+
+**Bring your own harness.** Any MCP-capable agent (Devin, Cursor, Codex,
+Claude Code, opencode) attaches to `signet mcp` and gets `signet_save`,
+`signet_recall`, `signet_search`, and friends over stdio. Decryption and
+signing happen in that local process; the store stays crypto-blind.
+
+**Signet-native CLI.** The `beardthelion/fx` fork sources its settings,
+sessions, permission grants, and learned memory straight from the signet
+(`src/core/signet/`, same `spec/vectors/`). This is the deeper integration:
+state capture is passive rather than tool-driven, and sessions distill into
+durable memory at teardown. It is the reference for harness authors adding
+native support.
