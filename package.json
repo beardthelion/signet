@@ -17,7 +17,8 @@
     "src",
     "spec",
     "*.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "test": "bun test",

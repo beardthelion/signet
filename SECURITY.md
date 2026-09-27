@@ -16,6 +16,7 @@ In scope:
 - The client and custody path (`src/client/`, `bin/`): encryption, key derivation, secret scanning, custody export/import, signed rotation.
 - The wire contract and spec (`spec/`, `src/check/`): protocol weaknesses a conformant implementation would inherit.
 - The MCP adapter (`src/mcp/`): anything that leaks data across scopes or corrupts the protocol stream.
+- The learning capture path (`src/learn/`): session-mirror capture and distillation that could leak transcript content across scopes or into unintended entries.
 
 Out of scope:
 

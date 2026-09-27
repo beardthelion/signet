@@ -3,4 +3,6 @@ data/
 *.log
 .DS_Store
 dist/
-docs/plans/
+/docs/plans/
+plans/
+*-plan.md
