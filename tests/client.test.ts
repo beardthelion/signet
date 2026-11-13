@@ -789,6 +789,7 @@ describe('session mirroring (SN-022)', () => {
     await client.init()
 
     expect(isMirroredSessionFile('events.jsonl')).toBe(true)
+    expect(isMirroredSessionFile('transcript.json')).toBe(true)
     expect(isMirroredSessionFile('commit.a1b2c3.json')).toBe(true)
     expect(isMirroredSessionFile('commit.pending.json')).toBe(false)
     expect(isMirroredSessionFile('notes.md')).toBe(false)
@@ -803,6 +804,27 @@ describe('session mirroring (SN-022)', () => {
       'commit.a1b2c3.json': '{}\n',
     })
     expect(r.uploaded.length).toBeGreaterThan(0)
+  })
+
+  test('a foreign transcript mirror round-trips verbatim (SN-023)', async () => {
+    const { mirrorSession, hydrateSession } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.init()
+
+    const transcript = '{"schema_version":"1","session_id":"abc","steps":[{"message":"hi"}]}\n'
+    const descriptor = '{"schema_version":1,"session_id":"devin-abc","source":"devin"}\n'
+    await mirrorSession(client, 'devin-abc', {
+      'session.json': descriptor,
+      'transcript.json': transcript,
+    })
+
+    const files = await hydrateSession(client, 'devin-abc')
+    expect(files).not.toBeNull()
+    expect(files!['transcript.json']).toBe(transcript)
+    expect(files!['session.json']).toBe(descriptor)
+    expect(files!['events.jsonl']).toBeUndefined()
   })
 
   test('a displaced file re-uploads at its new region (packed-index migration)', async () => {

@@ -602,7 +602,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
       const bad = names.filter(n => !isMirroredSessionFile(n))
       if (bad.length > 0) {
         return fail(
-          `Refused: ${bad.map(n => `"${bounded(n, 60)}"`).join(', ')} ${bad.length === 1 ? 'is not a' : 'are not'} mirrored session member${bad.length === 1 ? '' : 's'} (SN-023). Mirrored members are events.jsonl, session.json, checkpoint.json, display.json, authority.json, usage-v2.json, and commit.<hex>.json records.`,
+          `Refused: ${bad.map(n => `"${bounded(n, 60)}"`).join(', ')} ${bad.length === 1 ? 'is not a' : 'are not'} mirrored session member${bad.length === 1 ? '' : 's'} (SN-023). Mirrored members are events.jsonl, session.json, checkpoint.json, display.json, authority.json, usage-v2.json, transcript.json, and commit.<hex>.json records.`,
         )
       }
       try {

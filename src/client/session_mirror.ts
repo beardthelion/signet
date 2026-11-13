@@ -49,13 +49,19 @@ const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const FILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const CHUNK_SEG_RE = /^\d{6}$/
 
-/** Metadata members mirrored alongside events.jsonl. */
+/**
+ * Metadata members mirrored alongside events.jsonl. `transcript.json`
+ * is the foreign-harness member: a vendor session export mirrored
+ * verbatim with a synthesized session.json descriptor, so non-fx
+ * harnesses archive losslessly instead of pretending at event_log_v1.
+ */
 const MIRRORED_META = new Set([
   'session.json',
   'checkpoint.json',
   'display.json',
   'authority.json',
   'usage-v2.json',
+  'transcript.json',
 ])
 
 /**

@@ -29,7 +29,7 @@
  */
 
 import { chmodSync, renameSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { SignetClient } from '../src/client/client.ts'
@@ -264,11 +264,88 @@ async function cmdRotate(): Promise<void> {
   console.log(`namespace unchanged: ${client.namespace}`)
 }
 
+/**
+ * Mirror a foreign-harness transcript (SN-023 transcript.json member): the
+ * vendor export verbatim as one member, plus a synthesized session.json
+ * descriptor so the archive is lossless rather than converted. `<path>`
+ * is one .json file or a directory to sweep; the session id becomes
+ * `<source>-<file basename>`. A transcript the credential scan flags is
+ * reported and skipped, never partially mirrored.
+ */
+async function cmdSessionImport(path: string, source = 'devin'): Promise<void> {
+  const { client, secrets } = await makeClient()
+  const pathStat = await stat(path)
+  const targets = pathStat.isDirectory()
+    ? (await readdir(path))
+        .filter(n => n.endsWith('.json'))
+        .sort()
+        .map(n => join(path, n))
+    : [path]
+  if (targets.length === 0) {
+    console.log(`no .json transcripts under ${path}`)
+    return
+  }
+  let mirrored = 0
+  let unchanged = 0
+  const refused: string[] = []
+  const failed: string[] = []
+  for (const file of targets) {
+    const base = file
+      .split('/')
+      .pop()!
+      .replace(/\.json$/, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    if (!base) {
+      failed.push(`${file} (no usable session id from the filename)`)
+      continue
+    }
+    const id = `${source}-${base}`
+    const files = {
+      'session.json':
+        JSON.stringify({
+          schema_version: 1,
+          session_id: id,
+          source,
+          storage_format: 'foreign_transcript_v1',
+        }) + '\n',
+      'transcript.json': await readFile(file, 'utf8'),
+    }
+    try {
+      const r = await mirrorSession(client, id, files)
+      if (r.uploaded.length > 0) mirrored++
+      else unchanged++
+      if (r.tombstoned.length) {
+        console.error(`warning: ${id} has tombstoned chunks (re-read before re-adding)`)
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/secret|credential/i.test(msg)) refused.push(id)
+      else failed.push(`${id}: ${msg.slice(0, 120)}`)
+    }
+    await recordSeq(client, secrets)
+  }
+  console.log(
+    `imported ${mirrored} session mirror(s), ${unchanged} already mirrored` +
+      (refused.length ? `, ${refused.length} refused by the credential scan` : '') +
+      (failed.length ? `, ${failed.length} failed` : ''),
+  )
+  for (const id of refused) console.error(`refused (credential-shaped content): ${id}`)
+  for (const f of failed) console.error(`failed: ${f}`)
+}
+
 async function cmdSession(
   sub: string | undefined,
   id: string | undefined,
   dir: string | undefined,
+  source?: string,
 ): Promise<void> {
+  if (sub === 'import') {
+    if (!id) usage()
+    await cmdSessionImport(id, source)
+    return
+  }
   if ((sub !== 'push' && sub !== 'pull') || !id || !dir) usage()
   const { client, secrets } = await makeClient()
   if (sub === 'push') {
@@ -313,7 +390,7 @@ async function cmdSession(
 
 const argv = process.argv.slice(2)
 const force = argv.includes('--force')
-const [cmd, a, b, c] = argv.filter(x => x !== '--force')
+const [cmd, a, b, c, d] = argv.filter(x => x !== '--force')
 
 try {
   switch (cmd) {
@@ -329,7 +406,7 @@ try {
       await cmdPull(a!)
       break
     case 'session':
-      await cmdSession(a, b, c)
+      await cmdSession(a, b, c, d)
       break
     case 'learn':
       if (!a) usage()
@@ -373,6 +450,7 @@ function usage(): never {
       '  signet pull <dir>        verify + download + decrypt into <dir>\n' +
       '  signet session push <id> <dir>   mirror a session dir as chunked entries\n' +
       '  signet session pull <id> <dir>   reassemble a mirrored session into <dir>\n' +
+      '  signet session import <path> [source]   mirror foreign transcript(s) (file or dir)\n' +
       '  signet learn <file>      distill session content into memory/ entries\n' +
       '  signet export <file>     write an encrypted custody bundle\n' +
       '  signet import <file>     restore custody from a bundle [--force]\n' +

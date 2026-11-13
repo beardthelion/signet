@@ -263,7 +263,7 @@ export async function main(): Promise<void> {
     {
       title: 'Mirror a session into the signet',
       description:
-        'Write a session as the chunked v2 mirror (SN-023): a JSON index plus per-file chunk entries under sessions/<id>/. The files map is the complete desired member set; only events.jsonl, session.json, checkpoint.json, display.json, authority.json, usage-v2.json, and commit.<hex>.json members are accepted. Content is credential-scanned before encryption (SN-110).',
+        'Write a session as the chunked v2 mirror (SN-023): a JSON index plus per-file chunk entries under sessions/<id>/. The files map is the complete desired member set; only events.jsonl, session.json, checkpoint.json, display.json, authority.json, usage-v2.json, transcript.json (foreign-harness exports), and commit.<hex>.json members are accepted. Content is credential-scanned before encryption (SN-110).',
       inputSchema: {
         session_id: z
           .string()

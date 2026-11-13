@@ -119,8 +119,13 @@ total loss by design; there is no recovery path in this version.
   renumber another member's chunks; remote chunk keys no record names
   are deleted. Mirrored members are exactly `events.jsonl`,
   `checkpoint.json`, `display.json`, `authority.json`, `session.json`,
-  `usage-v2.json`, and `commit.<hex>.json` records (never
-  `commit.pending.json`); member names are flat segments per SN-020.
+  `usage-v2.json`, `transcript.json`, and `commit.<hex>.json` records
+  (never `commit.pending.json`); member names are flat segments per
+  SN-020. `transcript.json` is the foreign-harness member: a vendor
+  session export (Devin, Cursor, and so on) mirrored verbatim as one
+  file, with `session.json` carrying a synthesized descriptor
+  (`source`, `session_id`) so the archive is lossless rather than
+  converted to a format the harness does not write.
   The credential scan runs on the assembled file before chunking, so a
   secret straddling a chunk boundary cannot split into two clean halves.
   Hydration MUST fail closed: a missing chunk, a byte-count mismatch, or
