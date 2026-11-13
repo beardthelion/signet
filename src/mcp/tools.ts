@@ -40,6 +40,8 @@ import {
   SignetMirrorCorrupt,
   SignetMirrorOversize,
 } from '../client/session_mirror.ts'
+import { captureLearnings } from '../learn/capture.ts'
+import type { LearningType } from '../learn/distill.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
 import { frontmatterScope, rankEntries } from './relevance.ts'
 
@@ -74,11 +76,18 @@ export type ToolOptions = {
   onSync?: () => void | Promise<void>
   /**
    * The workspace basename this process serves (the harness's cwd by
-   * default). recall excludes `memory/project/*` entries whose scope:
-   * field names a different workspace: a learning scoped to another repo
-   * is a wrong-repo fact here, not a relevant one. Unset = no filtering.
+   * default). recall excludes `memory/` entries whose scope: field names a
+   * different workspace: a learning scoped to another repo is a wrong-repo
+   * fact here, not a relevant one. Unset = no filtering.
    */
   workspaceScope?: string
+  /**
+   * The MCP client's self-declared name (the `clientInfo.name` from
+   * initialize), resolved lazily per call because clientInfo only exists
+   * after the handshake. Used for `provenance: learned:<harness>` on
+   * memory writes.
+   */
+  harnessName?: () => string | undefined
 }
 
 const ok = (text: string): ToolResult => ({ text })
@@ -191,6 +200,52 @@ function keyError(key: string): string | null {
 }
 
 /**
+ * The `learned:<harness>` tag for entries written through this adapter.
+ * clientInfo names arrive free-form ("Visual Studio Code", "Devin CLI");
+ * they normalize to a lowercase slug so provenance stays greppable. 'mcp'
+ * is the fallback when the client never said who it is - it at least
+ * records which adapter wrote the entry.
+ */
+function harnessTag(raw: string | undefined): string {
+  const name = (raw ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+  return name || 'mcp'
+}
+
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/
+
+/**
+ * Fill the ambient frontmatter fields a `save` caller cannot supply:
+ * `provenance: learned:<harness>` on every memory write, and `scope:` on
+ * `memory/project/*` entries when a workspace scope is configured. Fields
+ * the caller already declared are never touched - injection fills gaps,
+ * it does not rewrite intent, so a harness that scopes deliberately keeps
+ * its scope. Non-memory keys pass through verbatim: grants, config, and
+ * session members have their own shapes and this is memory metadata.
+ */
+function withAmbientMemoryFields(key: string, content: string, opts: ToolOptions): string {
+  if (!key.startsWith('memory/')) return content
+  const fm = FRONTMATTER_RE.exec(content)
+  const block = fm ? fm[1] : ''
+  const fields: string[] = []
+  if (!/^provenance:\s*\S/m.test(block)) {
+    fields.push(`provenance: learned:${harnessTag(opts.harnessName?.())}`)
+  }
+  if (key.startsWith('memory/project/') && opts.workspaceScope && !/^scope:\s*\S/m.test(block)) {
+    fields.push(`scope: ${opts.workspaceScope}`)
+  }
+  if (fields.length === 0) return content
+  if (!fm) return `---\n${fields.join('\n')}\n---\n\n${content}`
+  // Insert before the closing '---'; the regex guarantees a newline just
+  // before it, so the new fields land as their own lines.
+  const insertAt = content.indexOf(fm[0]) + fm[0].length - 3
+  return `${content.slice(0, insertAt)}${fields.join('\n')}\n${content.slice(insertAt)}`
+}
+
+/**
  * A grants/<id>.json entry key, or null when the id cannot form one. The id
  * must be a single flat segment: a nested grants/a/b.json would be a second,
  * shadow vocabulary for grant identity.
@@ -241,7 +296,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
       const refusal = writeRefusal(key)
       if (refusal) return fail(`Refused to save: ${refusal}`)
       try {
-        const r = await client.push({ [key]: content })
+        const r = await client.push({ [key]: withAmbientMemoryFields(key, content, opts) })
         await sync()
         if (r.tombstoned.includes(key)) {
           return ok(
@@ -259,20 +314,64 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
       }
     },
 
+    /**
+     * Write one durable learning through the SN-120 path: typed key
+     * (`memory/<type>/<slug>.md`), full frontmatter, and the ambient
+     * scope on project learnings. This is the same capture pipeline the
+     * CLI's `signet learn` and fx's native writer use - `save` is for
+     * verbatim entries, `learn` is for facts worth remembering.
+     */
+    async learn(type: LearningType, title: string, body: string): Promise<ToolResult> {
+      try {
+        const outcome = await captureLearnings(
+          client,
+          [
+            {
+              type,
+              title,
+              body,
+              ...(type === 'project' && opts.workspaceScope ? { scope: opts.workspaceScope } : {}),
+            },
+          ],
+          { harness: harnessTag(opts.harnessName?.()) },
+        )
+        if (outcome.uploaded.length > 0 || outcome.unchanged.length > 0) await sync()
+        const parts: string[] = []
+        for (const k of outcome.uploaded) parts.push(`learned "${k}"`)
+        for (const k of outcome.unchanged) {
+          parts.push(`unchanged "${k}" (the signet already held it)`)
+        }
+        for (const b of outcome.blocked) {
+          parts.push(
+            `refused "${b.key}": the pre-encryption scan flagged what looks like a live credential (${b.rules.join(', ')}) - secrets never enter a signet (SN-110)`,
+          )
+        }
+        if (parts.length === 0) return ok('nothing was written')
+        if (outcome.uploaded.length === 0 && outcome.unchanged.length === 0) {
+          return fail(parts.join('\n'))
+        }
+        return ok(parts.join('\n'))
+      } catch (e) {
+        return fail(renderError(`Learning "${bounded(title, 80)}"`, e, 'Nothing was stored.'))
+      }
+    },
+
     /** Rank stored entries by relevance to a natural-language query. */
     async recall(query: string, limit = 5): Promise<ToolResult> {
       try {
         const entries = await pullUserEntries()
         if (Object.keys(entries).length === 0) return ok('(the signet is empty)')
-        // Project learnings scoped to another workspace are wrong-repo
+        // Memory entries scoped to another workspace are wrong-repo
         // facts here: rank against the rest and report the exclusion so
-        // the model can still signet_get one deliberately.
+        // the model can still signet_get one deliberately. The scope: field
+        // is honored on any memory/ key, not just memory/project/ - entries
+        // written before the typed path existed still respect it.
         let pool = entries
         let foreignCount = 0
         if (opts.workspaceScope) {
           pool = {}
           for (const [key, content] of Object.entries(entries)) {
-            const scope = key.startsWith('memory/project/') ? frontmatterScope(content) : null
+            const scope = key.startsWith('memory/') ? frontmatterScope(content) : null
             if (scope !== null && scope !== opts.workspaceScope) {
               foreignCount++
               continue
@@ -289,7 +388,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
         if (ranked.length === 0) {
           const scopeNote =
             foreignCount > 0
-              ? ` (${foreignCount} project entr${foreignCount === 1 ? 'y' : 'ies'} scoped to other workspaces not considered; fetch one by key with signet_get if you actually need it)`
+              ? ` (${foreignCount} memory entr${foreignCount === 1 ? 'y' : 'ies'} scoped to other workspaces not considered; fetch one by key with signet_get if you actually need it)`
               : ''
           return ok(
             `(nothing in the signet looks relevant to "${bounded(query, 120)}")${scopeNote}`,
@@ -320,7 +419,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
         }
         if (foreignCount > 0) {
           trailers.push(
-            `${foreignCount} project entr${foreignCount === 1 ? 'y' : 'ies'} scoped to other workspaces skipped`,
+            `${foreignCount} memory entr${foreignCount === 1 ? 'y' : 'ies'} scoped to other workspaces skipped`,
           )
         }
         const trailer = trailers.length > 0 ? `\n\n(${trailers.join('; ')})` : ''

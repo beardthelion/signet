@@ -25,16 +25,22 @@ only ever holds ciphertext; decryption happens locally, inside this server.
 
 ## Tools
 
-- signet_save(key, content) - write one entry. Keys are <section>/<path>
-  with section one of memory, config, sessions, grants, identity. Plaintext
-  is scanned for credential shapes before encryption; a save that looks like
-  it carries a secret is refused (SN-110).
+- signet_save(key, content) - write one entry verbatim. Keys are
+  <section>/<path> with section one of memory, config, sessions, grants,
+  identity. Plaintext is scanned for credential shapes before encryption; a
+  save that looks like it carries a secret is refused (SN-110). memory/
+  writes gain ambient provenance (and project entries the workspace scope)
+  when the content does not already declare them.
+- signet_learn(type, title, body) - the typed write path for durable
+  learnings (SN-120): writes memory/<type>/<slug>.md with full frontmatter
+  (type, provenance: learned:<harness>, description, and scope: for project
+  learnings). Prefer this over signet_save for facts worth remembering.
 - signet_recall(query, limit?) - ranked retrieval: the entries most
   relevant to a natural-language query. Call this at the start of a task
   before asking the user things they may have already told a previous session.
-  memory/project/ entries carry a scope: field (the workspace they were
-  learned in); recall skips ones scoped to a different workspace and says
-  how many it skipped, so a fact never recalls into the wrong repo.
+  Memory entries may carry a scope: field (the workspace they were learned
+  in); recall skips ones scoped to a different workspace and says how many
+  it skipped, so a fact never recalls into the wrong repo.
 - signet_search(query) - literal substring search over keys and content.
 - signet_list(section?) - entry keys only, no content.
 - signet_delete(key) - remove one entry. Destructive and explicit: the full
@@ -101,7 +107,8 @@ export const SHORT_INSTRUCTIONS =
   'You have access to a Signet: end-to-end-encrypted working state that ' +
   'survives across harnesses. At the start of a task, call signet_recall to ' +
   'retrieve what prior sessions already knew. Persist durable facts with ' +
-  'signet_save; skip transient context and never save secrets. Config keys ' +
+  'signet_learn (typed memory entries) or signet_save (verbatim entries); ' +
+  'skip transient context and never save secrets. Config keys ' +
   'that look permission-affecting are refused (SN-070): permission state lives ' +
   'in grants/, where signet_grant_record writes only holder-confirmed ' +
   'grants and no tool ever applies one. Call the "signet_guide" prompt for ' +

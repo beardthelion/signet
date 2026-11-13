@@ -237,6 +237,19 @@ describe('renderLearningEntry', () => {
     expect(content).toContain('description:')
     expect(content).toContain('vendor clouds')
   })
+
+  test('renders scope last on project learnings only, matching the fx writer', () => {
+    const scoped = renderLearningEntry(
+      { type: 'project', title: 'pnpm', body: 'we use pnpm.\n', scope: 'signet' },
+      'mcp',
+    )
+    expect(scoped.content).toContain('description: pnpm\nscope: signet\n---')
+    const feedback = renderLearningEntry(
+      { type: 'feedback', title: 'run tests first', body: 'run tests first.\n', scope: 'signet' },
+      'mcp',
+    )
+    expect(feedback.content).not.toContain('scope:')
+  })
 })
 
 // ─── Capture ────────────────────────────────────────────────────────────

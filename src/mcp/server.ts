@@ -25,6 +25,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { clientFromCustody, persistManifestSeq } from '../client/session.ts'
+import { LEARNING_TYPES } from '../learn/distill.ts'
 import { DEFAULT_URL } from '../types/defaults.ts'
 import { GRANT_ACTIONS, SECTIONS } from '../types/index.ts'
 import { SHORT_INSTRUCTIONS, SIGNET_GUIDE } from './guide.ts'
@@ -55,21 +56,25 @@ export async function main(): Promise<void> {
   }
   const { client, secrets } = wired
 
+  const server = new McpServer(
+    { name: 'signet', version: '0.1.0' },
+    { instructions: SHORT_INSTRUCTIONS },
+  )
+
   const tools = makeTools(client, {
     holderDid: secrets.genesisDid,
     // Persist the manifest seq after every write so the next process still
     // rejects a rolled-back manifest (SN-041 state lives in custody).
     onSync: () => persistManifestSeq(client, secrets),
     // A stdio server inherits the harness's workspace cwd; its basename is
-    // the ambient scope project learnings get filtered by. An explicit env
+    // the ambient scope memory entries get filtered by. An explicit env
     // override wins for harnesses that spawn the server from elsewhere.
     workspaceScope: process.env.SIGNET_WORKSPACE_SCOPE || basename(process.cwd()) || undefined,
+    // The client's self-declared name from the initialize handshake becomes
+    // `provenance: learned:<harness>` on memory writes - read lazily since
+    // clientInfo only exists after initialize completes.
+    harnessName: () => server.server.getClientVersion()?.name,
   })
-
-  const server = new McpServer(
-    { name: 'signet', version: '0.1.0' },
-    { instructions: SHORT_INSTRUCTIONS },
-  )
 
   // The full usage protocol, fetchable by any MCP client.
   server.registerPrompt(
@@ -89,7 +94,7 @@ export async function main(): Promise<void> {
     {
       title: 'Save a signet entry',
       description:
-        'Persist one entry to the encrypted signet, e.g. "memory/preferences.md". Scanned for credential shapes before encryption (SN-110). Cannot write grants/ (use signet_grant_record) or identity/ (client-managed), and config keys matching the SN-070 denylist are refused.',
+        'Persist one entry to the encrypted signet verbatim, e.g. "memory/preferences.md". Scanned for credential shapes before encryption (SN-110). memory/ writes gain the ambient provenance (and project entries the workspace scope) when the caller does not declare them. Cannot write grants/ (use signet_grant_record) or identity/ (client-managed), and config keys matching the SN-070 denylist are refused. Prefer signet_learn for durable facts worth remembering.',
       inputSchema: {
         key: z
           .string()
@@ -103,11 +108,31 @@ export async function main(): Promise<void> {
   )
 
   server.registerTool(
+    'signet_learn',
+    {
+      title: 'Save a durable learning',
+      description:
+        'Distill one durable fact into memory/<type>/<slug>.md with the SN-120 frontmatter (type, provenance: learned:<this harness>, description; project learnings also get the ambient workspace scope). Prefer this over signet_save for facts worth remembering; save writes verbatim entries. Credential-shaped content is refused before encryption (SN-110).',
+      inputSchema: {
+        type: z
+          .enum(LEARNING_TYPES)
+          .describe('Memory type (SN-120): user | feedback | project | reference.'),
+        title: z
+          .string()
+          .min(1)
+          .describe('One-line summary; becomes the frontmatter description and slug.'),
+        body: z.string().min(1).describe('The distilled content to remember.'),
+      },
+    },
+    async ({ type, title, body }) => toMcp(await tools.learn(type, title, body)),
+  )
+
+  server.registerTool(
     'signet_recall',
     {
       title: 'Recall relevant entries',
       description:
-        'Return the signet entries most relevant to a natural-language query, ranked. Project learnings scoped to a different workspace are excluded (they are other-repo facts here). Call this before asking the user things a previous session may already know.',
+        'Return the signet entries most relevant to a natural-language query, ranked. Memory entries scoped to a different workspace are excluded (they are other-repo facts here). Call this before asking the user things a previous session may already know.',
       inputSchema: {
         query: z.string().describe('What you want to remember about.'),
         limit: z.number().int().min(1).max(20).optional().describe('Max results (default 5).'),

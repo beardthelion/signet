@@ -19,7 +19,7 @@
  * MUST treat empty as "write nothing" - no entries, no manifest churn.
  */
 
-const LEARNING_TYPES = ['user', 'feedback', 'project', 'reference'] as const
+export const LEARNING_TYPES = ['user', 'feedback', 'project', 'reference'] as const
 export type LearningType = (typeof LEARNING_TYPES)[number]
 
 export type Learning = {
@@ -29,6 +29,12 @@ export type Learning = {
   title: string
   /** The distilled content. */
   body: string
+  /**
+   * Ambient workspace scope (the workspace basename the learning was made
+   * in). Rendered only on `project` learnings, matching the fx writer; the
+   * caller supplies it - it is ambient context, never model input (SN-120).
+   */
+  scope?: string
 }
 
 export type DistillOptions = {

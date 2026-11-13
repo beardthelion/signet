@@ -156,7 +156,7 @@ function makeStub() {
 
 const PASS = 'mcp test passphrase'
 
-function rig(opts: { workspaceScope?: string } = {}) {
+function rig(opts: { workspaceScope?: string; harnessName?: string } = {}) {
   const stub = makeStub()
   const id = generateIdentity()
   const client = new SignetClient({
@@ -172,6 +172,7 @@ function rig(opts: { workspaceScope?: string } = {}) {
       synced.push(client.manifestSeq)
     },
     ...(opts.workspaceScope ? { workspaceScope: opts.workspaceScope } : {}),
+    ...(opts.harnessName ? { harnessName: () => opts.harnessName } : {}),
   })
   return { stub, id, client, tools, synced }
 }
@@ -434,6 +435,7 @@ describe('grant tools', () => {
       'get',
       'grantList',
       'grantRecord',
+      'learn',
       'list',
       'recall',
       'save',
@@ -465,7 +467,7 @@ describe('scope-aware recall', () => {
     expect(r.isError).toBeUndefined()
     expect(r.text).toContain('pnpm-here')
     expect(r.text).not.toContain('pnpm-elsewhere')
-    expect(r.text).toContain('1 project entry scoped to other workspaces skipped')
+    expect(r.text).toContain('1 memory entry scoped to other workspaces skipped')
   })
 
   test('no workspace scope means no filtering', async () => {
@@ -501,6 +503,130 @@ describe('scope-aware recall', () => {
     const r = await tools.recall('package manager pnpm')
     expect(r.isError).toBeUndefined()
     expect(r.text).toContain('scoped to other workspaces')
+  })
+
+  test('flat memory/ entries honor scope: too, not only memory/project/', async () => {
+    const { tools } = rig({ workspaceScope: 'repo-a' })
+    // Entries written before the typed path existed (or verbatim via save)
+    // sit at memory/<name>.md; a declared scope: still partitions them.
+    await tools.save(
+      'memory/flat-foreign.md',
+      '---\nscope: repo-b\n---\ndeploy notes for repo-b.\n',
+    )
+    await tools.save('memory/flat-here.md', '---\nscope: repo-a\n---\ndeploy notes for repo-a.\n')
+
+    const r = await tools.recall('deploy notes')
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('flat-here')
+    expect(r.text).not.toContain('flat-foreign')
+  })
+})
+
+// ─── Ambient fields on save ────────────────────────────────────────────
+
+describe('ambient memory fields on save', () => {
+  test('save injects provenance on a memory write without frontmatter', async () => {
+    const { tools } = rig({ harnessName: 'Devin CLI' })
+    await tools.save('memory/note.md', 'Remember the milk.\n')
+
+    const got = await tools.get('memory/note.md')
+    expect(got.text).toContain('provenance: learned:devin-cli')
+    expect(got.text).toContain('Remember the milk.')
+  })
+
+  test('save injects workspace scope on project entries', async () => {
+    const { tools } = rig({ workspaceScope: 'signet', harnessName: 'Cursor' })
+    await tools.save('memory/project/pm.md', 'We use pnpm here.\n')
+
+    const got = await tools.get('memory/project/pm.md')
+    expect(got.text).toContain('scope: signet')
+    expect(got.text).toContain('provenance: learned:cursor')
+  })
+
+  test('caller-declared fields win over injection', async () => {
+    const { tools } = rig({ workspaceScope: 'signet', harnessName: 'Cursor' })
+    await tools.save(
+      'memory/project/explicit.md',
+      '---\nprovenance: learned:fx\nscope: other-repo\n---\nDeliberately scoped.\n',
+    )
+
+    const got = await tools.get('memory/project/explicit.md')
+    expect(got.text).toContain('provenance: learned:fx')
+    expect(got.text).toContain('scope: other-repo')
+    expect(got.text).not.toContain('scope: signet')
+    expect(got.text).not.toContain('learned:cursor')
+  })
+
+  test('injection fills gaps inside existing frontmatter', async () => {
+    const { tools } = rig({ workspaceScope: 'signet', harnessName: 'Devin' })
+    await tools.save(
+      'memory/project/partial.md',
+      '---\ndescription: kept\n---\nHas frontmatter but no ambient fields.\n',
+    )
+
+    const got = await tools.get('memory/project/partial.md')
+    expect(got.text).toContain('description: kept')
+    expect(got.text).toContain('provenance: learned:devin')
+    expect(got.text).toContain('scope: signet')
+  })
+
+  test('non-memory keys pass through verbatim', async () => {
+    const { tools } = rig({ workspaceScope: 'signet', harnessName: 'Devin' })
+    await tools.save('config/settings.json', '{"x":1}\n')
+
+    const got = await tools.get('config/settings.json')
+    expect(got.text).toContain('{"x":1}')
+    expect(got.text).not.toContain('provenance')
+    expect(got.text).not.toContain('---')
+  })
+})
+
+// ─── signet_learn ──────────────────────────────────────────────────────
+
+describe('signet_learn', () => {
+  test('learn writes the typed key with full SN-120 frontmatter and scope', async () => {
+    const { tools } = rig({ workspaceScope: 'signet', harnessName: 'Devin' })
+    const r = await tools.learn(
+      'project',
+      'chose pnpm',
+      'We decided pnpm is the package manager for this project.\n',
+    )
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('learned "memory/project/chose-pnpm.md"')
+
+    const got = await tools.get('memory/project/chose-pnpm.md')
+    expect(got.text).toContain('type: project')
+    expect(got.text).toContain('provenance: learned:devin')
+    expect(got.text).toContain('description: chose pnpm')
+    expect(got.text).toContain('scope: signet')
+    expect(got.text).toContain('pnpm is the package manager')
+  })
+
+  test('learn without a workspace scope writes the entry unscoped', async () => {
+    const { tools } = rig({ harnessName: 'Cursor' })
+    const r = await tools.learn(
+      'feedback',
+      'run tests first',
+      'The fix was to run the suite before the build.\n',
+    )
+    expect(r.isError).toBeUndefined()
+
+    const list = await tools.list('memory')
+    expect(list.text).toContain('memory/feedback/run-tests-first.md')
+    const got = await tools.get('memory/feedback/run-tests-first.md')
+    expect(got.text).toContain('type: feedback')
+    expect(got.text).toContain('provenance: learned:cursor')
+    expect(got.text).not.toContain('scope:')
+  })
+
+  test('learn refuses credential-shaped content and writes nothing', async () => {
+    const { tools } = rig()
+    const r = await tools.learn('reference', 'api token', `token: ghp_${'a'.repeat(30)}\n`)
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/credential|refused/i)
+
+    const list = await tools.list('memory')
+    expect(list.text).toContain('(no entries under memory/)')
   })
 })
 

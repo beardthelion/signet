@@ -81,6 +81,9 @@ export function renderLearningEntry(
     `type: ${learning.type}\n` +
     `provenance: learned:${harness}\n` +
     `description: ${learning.title.replace(/\s+/g, ' ').trim()}\n` +
+    // `scope:` lands last, only on project learnings, matching the fx
+    // writer's field order so the two implementations emit one shape.
+    (learning.scope && learning.type === 'project' ? `scope: ${learning.scope}\n` : '') +
     `---\n\n` +
     `${learning.body.trim()}\n`
   return { key, content }
