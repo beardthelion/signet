@@ -41,6 +41,13 @@ const DEFAULT_CAPS: Record<string, number> = {
 }
 const MAX_INDEX_BYTES = 256 * 1024
 const MAX_MIRRORED_FILES = 64
+/**
+ * A single file record's chunk ceiling: twice the legitimate max, which
+ * is the largest mirrored file (events.jsonl at 512 MiB) chunked at the
+ * default 512 KiB payload. A torn signed index must fail parse, not
+ * materialize billions of key strings in the batched hydrate path.
+ */
+const MAX_RECORD_CHUNKS = 2048
 
 /** Session member key for any seq, index (0) included. */
 export const seqKey = (id: string, seq: number) =>
@@ -153,6 +160,9 @@ export function parseIndex(bytes: string): MirrorIndex {
     // must fit in `chunks` entries of at most the spec entry cap, and a
     // zero-byte file owns no chunks. Torn contents are caught by the
     // sha256 the hydration path verifies.
+    if (f.chunks > MAX_RECORD_CHUNKS) {
+      throw new SignetMirrorCorrupt(`index ${f.name} names ${f.chunks} chunks`)
+    }
     if (f.chunks > 0 && f.bytes > f.chunks * MAX_CHUNK_PAYLOAD) {
       throw new SignetMirrorCorrupt(`index ${f.name} chunk count cannot span its byte count`)
     }
@@ -346,7 +356,7 @@ export async function mirrorSession(
  * index exists; throws SignetMirrorCorrupt on a torn or malformed mirror.
  */
 export async function hydrateSession(
-  client: MirrorClient,
+  client: MirrorClient & MemberClient,
   sessionId: string,
 ): Promise<Record<string, string> | null> {
   assertSessionId(sessionId)
@@ -355,15 +365,33 @@ export async function hydrateSession(
   if (indexBytes.length > MAX_INDEX_BYTES) throw new SignetMirrorCorrupt('index too large')
   const index = parseIndex(indexBytes)
 
+  const keys: string[] = []
+  const owner = new Map<string, string>()
+  for (const record of index.files) {
+    for (let s = record.first; s < record.first + record.chunks; s++) {
+      const key = seqKey(sessionId, s)
+      keys.push(key)
+      owner.set(key, record.name)
+    }
+  }
+  let fetched: Record<string, string>
+  try {
+    fetched = await client.readEntries(keys)
+  } catch (e) {
+    if (e instanceof SignetEntryMissing) {
+      const seq = Number.parseInt(e.entryKey.slice(-SEQ_WIDTH), 10)
+      throw new SignetMirrorCorrupt(
+        `index names chunk ${seq} of ${owner.get(e.entryKey) ?? 'a mirrored file'}, which is absent`,
+      )
+    }
+    throw e
+  }
+
   const files: Record<string, string> = {}
   for (const record of index.files) {
     const chunks: string[] = []
     for (let s = record.first; s < record.first + record.chunks; s++) {
-      const chunk = await client.readEntry(seqKey(sessionId, s))
-      if (chunk === null) {
-        throw new SignetMirrorCorrupt(`index names chunk ${s} of ${record.name}, which is absent`)
-      }
-      chunks.push(chunk)
+      chunks.push(fetched[seqKey(sessionId, s)]!)
     }
     files[record.name] = verifyAssembled(record, chunks)
   }

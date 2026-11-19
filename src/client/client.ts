@@ -886,10 +886,10 @@ export class SignetClient {
   async readEntries(keys: string[]): Promise<Record<string, string>> {
     if (keys.length === 0) return {}
     const remote = await this.remoteManifest()
-    if (!remote) throw new SignetEntryMissing(keys[0]!)
+    if (!remote) throw new SignetEntryMissing(keys[0]!, keys)
     this.adoptManifest(remote)
     const manifestEntries = remote.signed.manifest.entries
-    const missing = keys.filter(k => manifestEntries[k] === undefined)
+    const missing = keys.filter(k => !Object.hasOwn(manifestEntries, k))
     if (missing.length > 0) throw new SignetEntryMissing(missing[0]!, missing)
     return this.fetchEntries(manifestEntries, keys)
   }
