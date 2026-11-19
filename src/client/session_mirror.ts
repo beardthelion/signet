@@ -23,7 +23,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { SignetClient } from './client.ts'
+import { SignetEntryMissing, type SignetClient } from './client.ts'
 import { SecretFoundError, scanEntry } from './secretscan.ts'
 
 /** Plaintext bytes per chunk entry (SN-081: under the 1 MiB entry cap). */
@@ -42,7 +42,9 @@ const DEFAULT_CAPS: Record<string, number> = {
 const MAX_INDEX_BYTES = 256 * 1024
 const MAX_MIRRORED_FILES = 64
 
-const seqKey = (id: string, seq: number) => `sessions/${id}/${String(seq).padStart(SEQ_WIDTH, '0')}`
+/** Session member key for any seq, index (0) included. */
+export const seqKey = (id: string, seq: number) =>
+  `sessions/${id}/${String(seq).padStart(SEQ_WIDTH, '0')}`
 const chunksFor = (bytes: number, chunkBytes: number) => Math.ceil(bytes / chunkBytes)
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -104,7 +106,7 @@ export class SignetMirrorOversize extends Error {
   }
 }
 
-function parseIndex(bytes: string): MirrorIndex {
+export function parseIndex(bytes: string): MirrorIndex {
   let root: unknown
   try {
     root = JSON.parse(bytes)
@@ -373,4 +375,70 @@ export async function hydrateSession(
     files[record.name] = bytes.toString('utf8')
   }
   return files
+}
+
+/** The batched client surface member hydration needs. SignetClient satisfies it. */
+export type MemberClient = Pick<SignetClient, 'readEntries'>
+
+/**
+ * Reassemble one mirrored member for `sessionId` - the index plus the
+ * member's own chunk range, batched so each batch verifies the signed
+ * manifest once rather than per chunk. Returns null when no index exists
+ * or the index names no such member; the distinction between the two is
+ * positional (selection confirms the index key before hydrating, so null
+ * in context means member-absent). Throws SignetMirrorCorrupt on a torn
+ * range, byte-count mismatch, or sha256 mismatch - scoped to the named
+ * member, so corruption in sibling members does not block this read.
+ */
+export async function hydrateSessionMember(
+  client: MemberClient,
+  sessionId: string,
+  member: string,
+): Promise<{ content: string; record: MirrorFileRecord } | null> {
+  if (!SESSION_ID_RE.test(sessionId)) {
+    throw new SignetMirrorCorrupt(`invalid session id ${JSON.stringify(sessionId)}`)
+  }
+  if (!isMirroredSessionFile(member)) {
+    throw new SignetMirrorCorrupt(`not a mirrored session member: ${member}`)
+  }
+  let indexBytes: string | undefined
+  try {
+    indexBytes = (await client.readEntries([seqKey(sessionId, INDEX_SEQ)]))[
+      seqKey(sessionId, INDEX_SEQ)
+    ]
+  } catch (e) {
+    if (e instanceof SignetEntryMissing) return null
+    throw e
+  }
+  if (indexBytes === undefined) return null
+  if (indexBytes.length > MAX_INDEX_BYTES) throw new SignetMirrorCorrupt('index too large')
+  const index = parseIndex(indexBytes)
+  const record = index.files.find(f => f.name === member)
+  if (!record) return null
+
+  const keys: string[] = []
+  for (let s = record.first; s < record.first + record.chunks; s++) {
+    keys.push(seqKey(sessionId, s))
+  }
+  let fetched: Record<string, string>
+  try {
+    fetched = await client.readEntries(keys)
+  } catch (e) {
+    if (e instanceof SignetEntryMissing) {
+      throw new SignetMirrorCorrupt(
+        `index names chunk ${e.entryKey} of ${record.name}, which is absent`,
+      )
+    }
+    throw e
+  }
+  const bytes = Buffer.concat(keys.map(k => Buffer.from(fetched[k]!, 'utf8')))
+  if (bytes.length !== record.bytes) {
+    throw new SignetMirrorCorrupt(
+      `${record.name} reassembled to ${bytes.length} bytes, not ${record.bytes}`,
+    )
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== record.sha256) {
+    throw new SignetMirrorCorrupt(`${record.name} reassembled content fails its sha256`)
+  }
+  return { content: bytes.toString('utf8'), record }
 }
