@@ -32,7 +32,7 @@ import {
   SignetSkippedError,
   SignetTimeoutError,
 } from '../client/client.ts'
-import { SecretFoundError } from '../client/secretscan.ts'
+import { SecretFoundError, scanModeFromEnv } from '../client/secretscan.ts'
 import {
   hydrateSession,
   isMirroredSessionFile,
@@ -606,7 +606,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
         )
       }
       try {
-        const r = await mirrorSession(client, sessionId, files)
+        const r = await mirrorSession(client, sessionId, files, { scan: scanModeFromEnv() })
         await sync()
         const tombstone =
           r.tombstoned.length > 0

@@ -44,6 +44,7 @@ import {
 } from '../src/client/custody.ts'
 import { generateIdentity, namespaceFor } from '../src/client/identity.ts'
 import { clientFromCustody, persistManifestSeq } from '../src/client/session.ts'
+import { scanModeFromEnv } from '../src/client/secretscan.ts'
 import {
   hydrateSession,
   isMirroredSessionFile,
@@ -313,7 +314,7 @@ async function cmdSessionImport(path: string, source = 'devin'): Promise<void> {
       'transcript.json': await readFile(file, 'utf8'),
     }
     try {
-      const r = await mirrorSession(client, id, files)
+      const r = await mirrorSession(client, id, files, { scan: scanModeFromEnv() })
       if (r.uploaded.length > 0) mirrored++
       else unchanged++
       if (r.tombstoned.length) {
@@ -361,7 +362,7 @@ async function cmdSession(
     if (skipped.length) {
       console.error(`note: skipped non-mirrored members: ${skipped.join(', ')}`)
     }
-    const r = await mirrorSession(client, id, files)
+    const r = await mirrorSession(client, id, files, { scan: scanModeFromEnv() })
     await recordSeq(client, secrets)
     console.log(
       `mirrored session ${id}: ${r.uploaded.length} uploaded, ` +
