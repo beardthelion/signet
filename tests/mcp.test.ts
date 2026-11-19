@@ -123,8 +123,7 @@ function makeStub() {
 
     if (method === 'PUT' && entryKey === null) {
       const m =
-        manifests.get(ns) ??
-        new Map<string, { hash: string; size: number; updatedAt: string }>()
+        manifests.get(ns) ?? new Map<string, { hash: string; size: number; updatedAt: string }>()
       const currentHashes = Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))
       if (body.base !== undefined) {
         const expected = body.base === null ? stubManifestHash({}) : body.base
@@ -721,8 +720,7 @@ describe('signet_session_handoff', () => {
       '{"step_id":"s1","source":"user","message":"pick up the tokenizer work"},' +
       '{"step_id":"s2","source":"agent","message":"the tokenizer lives in src/tok"},' +
       '{"step_id":"s3","source":"agent","message":"tests are green"}]}\n'
-    const descriptor =
-      `{"session_id":"${id}","source":"devin","storage_format":"foreign_transcript_v1"}\n`
+    const descriptor = `{"session_id":"${id}","source":"devin","storage_format":"foreign_transcript_v1"}\n`
     const r = await tools.sessionPush(id, {
       'session.json': descriptor,
       'transcript.json': transcript,

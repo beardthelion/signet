@@ -128,8 +128,7 @@ function makeStub() {
 
     if (method === 'PUT' && entryKey === null) {
       const m =
-        manifests.get(ns) ??
-        new Map<string, { hash: string; size: number; updatedAt: string }>()
+        manifests.get(ns) ?? new Map<string, { hash: string; size: number; updatedAt: string }>()
       const currentHashes = Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))
       if (body.base !== undefined) {
         const expected = body.base === null ? EMPTY_BASE : body.base
@@ -213,12 +212,7 @@ const descriptor = (id: string, source = 'devin') =>
     mirrored_from: 'foreign',
   })}\n`
 
-async function seedSession(
-  client: SignetClient,
-  id: string,
-  specs: StepSpec[],
-  source = 'devin',
-) {
+async function seedSession(client: SignetClient, id: string, specs: StepSpec[], source = 'devin') {
   const t = transcript(specs)
   await mirrorSession(
     client,
@@ -298,9 +292,9 @@ describe('selection modes', () => {
     await expect(handoffPack(client, { steps: '2-4' })).rejects.toThrow(
       'requires an explicit session_id',
     )
-    await expect(
-      handoffPack(client, { sessionId: 'devin-one', steps: '4-2' }),
-    ).rejects.toThrow('invalid steps range')
+    await expect(handoffPack(client, { sessionId: 'devin-one', steps: '4-2' })).rejects.toThrow(
+      'invalid steps range',
+    )
   })
 
   test('a query with no match reports candidates, never silently falls back', async () => {

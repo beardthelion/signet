@@ -303,7 +303,9 @@ export async function main(): Promise<void> {
         query: z
           .string()
           .optional()
-          .describe('Natural-language selector ranking sessions on descriptor + transcript head/tail.'),
+          .describe(
+            'Natural-language selector ranking sessions on descriptor + transcript head/tail.',
+          ),
         steps: z
           .string()
           .optional()

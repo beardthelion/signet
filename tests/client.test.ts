@@ -221,7 +221,10 @@ function makeStub() {
         namespace: ns,
         base: stubManifestHash(Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))),
         entries: Object.fromEntries(
-          [...m.entries()].map(([k, v]) => [k, { hash: v.hash, size: v.size, updatedAt: v.updatedAt }]),
+          [...m.entries()].map(([k, v]) => [
+            k,
+            { hash: v.hash, size: v.size, updatedAt: v.updatedAt },
+          ]),
         ),
       })
     }
@@ -233,8 +236,7 @@ function makeStub() {
         return apiError('stale_base', 409, { current: 'sha256:0' })
       }
       const m =
-        manifests.get(ns) ??
-        new Map<string, { hash: string; size: number; updatedAt: string }>()
+        manifests.get(ns) ?? new Map<string, { hash: string; size: number; updatedAt: string }>()
       const currentHashes = Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))
       if (body.base !== undefined) {
         const expected = body.base === null ? EMPTY_BASE : body.base
@@ -525,13 +527,11 @@ describe('integrity - fail closed (SN-041)', () => {
     // The store plants a key in its unsigned view that the signed manifest
     // never named - the client must refuse to sign that view into the next
     // manifest rather than adopt it.
-    stub.manifests
-      .get(ns)!
-      .set('memory/planted.md', {
-        hash: `sha256:${'0'.repeat(64)}`,
-        size: 1,
-        updatedAt: '2026-01-01T00:00:00Z',
-      })
+    stub.manifests.get(ns)!.set('memory/planted.md', {
+      hash: `sha256:${'0'.repeat(64)}`,
+      size: 1,
+      updatedAt: '2026-01-01T00:00:00Z',
+    })
     await expect(client.push({ 'memory/b.md': 'v2\n' })).rejects.toThrow(SignetIntegrityError)
     // The verified manifest is untouched; pull still works.
     const out = await client.pull()
@@ -964,7 +964,9 @@ describe('manifestView + readEntries (handoff selection reads)', () => {
     const client = clientFor(stub, id)
     await client.push({ 'memory/a.md': 'alpha\n', 'memory/b.md': 'beta\n' })
     const view = await client.manifestView()
-    const keys = Object.keys(view).filter(k => k !== MANIFEST_ENTRY_KEY).sort()
+    const keys = Object.keys(view)
+      .filter(k => k !== MANIFEST_ENTRY_KEY)
+      .sort()
     expect(keys).toEqual(['memory/a.md', 'memory/b.md'])
     for (const key of keys) {
       const meta = view[key]!
@@ -1023,9 +1025,9 @@ describe('manifestView + readEntries (handoff selection reads)', () => {
     const stub = makeStub()
     const client = clientFor(stub, generateIdentity())
     await client.push({ 'memory/one.md': '1\n' })
-    await expect(
-      client.readEntries(['memory/one.md', 'memory/missing.md']),
-    ).rejects.toBeInstanceOf(SignetEntryMissing)
+    await expect(client.readEntries(['memory/one.md', 'memory/missing.md'])).rejects.toBeInstanceOf(
+      SignetEntryMissing,
+    )
     // Absence is not an integrity failure - the manifest was fine.
     await expect(client.readEntries(['memory/missing.md'])).rejects.not.toBeInstanceOf(
       SignetIntegrityError,
@@ -1063,7 +1065,8 @@ describe('hydrateSessionMember (member-scoped hydrate)', () => {
     const { mirrorSession } = await import('../src/client/session_mirror.ts')
     const transcript =
       '{"schema_version":1,"steps":[{"step_id":"s1","source":"user","message":"hi"}]}\n'
-    const descriptor = '{"session_id":"devin-x","source":"devin","storage_format":"foreign_transcript_v1"}\n'
+    const descriptor =
+      '{"session_id":"devin-x","source":"devin","storage_format":"foreign_transcript_v1"}\n'
     await mirrorSession(client, 'devin-x', {
       'session.json': descriptor,
       'transcript.json': transcript,
@@ -1137,9 +1140,9 @@ describe('hydrateSessionMember (member-scoped hydrate)', () => {
     const chunkKey = `sessions/devin-x/${String(tRec.first).padStart(6, '0')}`
     // The verified manifest stops naming the chunk - a torn mirror.
     await client.push({}, { deletions: [chunkKey] })
-    await expect(
-      hydrateSessionMember(client, 'devin-x', 'transcript.json'),
-    ).rejects.toBeInstanceOf(SignetMirrorCorrupt)
+    await expect(hydrateSessionMember(client, 'devin-x', 'transcript.json')).rejects.toBeInstanceOf(
+      SignetMirrorCorrupt,
+    )
   })
 
   test('a malformed index fails closed', async () => {
@@ -1152,8 +1155,8 @@ describe('hydrateSessionMember (member-scoped hydrate)', () => {
     await client.push({
       'sessions/bad/000000': '{"v":2,"files":[{"name":"transcript.json"}]}',
     })
-    await expect(
-      hydrateSessionMember(client, 'bad', 'transcript.json'),
-    ).rejects.toBeInstanceOf(SignetMirrorCorrupt)
+    await expect(hydrateSessionMember(client, 'bad', 'transcript.json')).rejects.toBeInstanceOf(
+      SignetMirrorCorrupt,
+    )
   })
 })

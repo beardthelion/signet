@@ -45,8 +45,8 @@ import {
   saveCustody,
 } from '../src/client/custody.ts'
 import { generateIdentity, namespaceFor } from '../src/client/identity.ts'
-import { clientFromCustody, persistManifestSeq } from '../src/client/session.ts'
 import { scanModeFromEnv } from '../src/client/secretscan.ts'
+import { clientFromCustody, persistManifestSeq } from '../src/client/session.ts'
 import { handoffPack, parseHandoffArgs } from '../src/client/session_handoff.ts'
 import {
   hydrateSession,

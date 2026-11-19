@@ -23,7 +23,6 @@
  *     trust.
  */
 
-import type { ManifestEntry } from '../types/index.ts'
 import type { PullResult, PushResult } from '../client/client.ts'
 import {
   MANIFEST_ENTRY_KEY,
@@ -33,7 +32,9 @@ import {
   SignetSkippedError,
   SignetTimeoutError,
 } from '../client/client.ts'
+import { frontmatterScope, rankEntries } from '../client/relevance.ts'
 import { SecretFoundError, scanModeFromEnv } from '../client/secretscan.ts'
+import { handoffPack, SignetHandoffError } from '../client/session_handoff.ts'
 import {
   hydrateSession,
   isMirroredSessionFile,
@@ -41,11 +42,10 @@ import {
   SignetMirrorCorrupt,
   SignetMirrorOversize,
 } from '../client/session_mirror.ts'
-import { handoffPack, SignetHandoffError } from '../client/session_handoff.ts'
 import { captureLearnings } from '../learn/capture.ts'
 import type { LearningType } from '../learn/distill.ts'
+import type { ManifestEntry } from '../types/index.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
-import { frontmatterScope, rankEntries } from '../client/relevance.ts'
 
 export type ToolResult = { text: string; isError?: boolean }
 

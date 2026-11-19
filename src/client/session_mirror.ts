@@ -23,7 +23,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { SignetEntryMissing, type SignetClient } from './client.ts'
+import { type SignetClient, SignetEntryMissing } from './client.ts'
 import { SecretFoundError, scanEntry } from './secretscan.ts'
 
 /** Plaintext bytes per chunk entry (SN-081: under the 1 MiB entry cap). */

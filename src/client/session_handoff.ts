@@ -23,7 +23,7 @@
  */
 
 import { isKeySegment, type ManifestEntry } from '../types/index.ts'
-import { sessionEntryKey, SignetEntryMissing } from './client.ts'
+import { SignetEntryMissing, sessionEntryKey } from './client.ts'
 import { rankEntries } from './relevance.ts'
 import { type Finding, scanEntry } from './secretscan.ts'
 import {
@@ -31,8 +31,8 @@ import {
   INDEX_SEQ,
   type MirrorFileRecord,
   parseIndex,
-  seqKey,
   SignetMirrorCorrupt,
+  seqKey,
 } from './session_mirror.ts'
 
 /** Default and ceiling for the pack budget, matching SESSION_TOTAL_MAX. */
@@ -98,7 +98,9 @@ export function parseHandoffArgs(args: string[]): HandoffArgs {
       const raw = args[++i]
       const n = raw === undefined ? Number.NaN : Number(raw)
       if (!Number.isInteger(n) || n <= 0) {
-        throw new SignetHandoffError(`--budget needs a positive integer, got ${JSON.stringify(raw)}`)
+        throw new SignetHandoffError(
+          `--budget needs a positive integer, got ${JSON.stringify(raw)}`,
+        )
       }
       out.budget = n
     } else if (a.startsWith('-')) {
@@ -210,7 +212,11 @@ function scanJsonArray(raw: string, open: number): { start: number; end: number 
 function stepText(parsed: Record<string, unknown>): string {
   const collect = (v: unknown): string => {
     if (typeof v === 'string') return v
-    if (Array.isArray(v)) return v.map(collect).filter(s => s !== '').join(' ')
+    if (Array.isArray(v))
+      return v
+        .map(collect)
+        .filter(s => s !== '')
+        .join(' ')
     if (v !== null && typeof v === 'object') {
       const t = (v as Record<string, unknown>).text
       return typeof t === 'string' ? t : ''
@@ -301,10 +307,7 @@ function sessionIdsFrom(keys: Iterable<string>): string[] {
  * session's members still go through the strict, fail-closed hydrate
  * path.
  */
-async function readPresent(
-  client: HandoffClient,
-  keys: string[],
-): Promise<Record<string, string>> {
+async function readPresent(client: HandoffClient, keys: string[]): Promise<Record<string, string>> {
   let want = keys
   for (;;) {
     try {
@@ -345,12 +348,7 @@ async function loadCandidates(client: HandoffClient, ids: string[]): Promise<Can
     }
     const transcript = index.files.find(f => f.name === TRANSCRIPT_MEMBER)
     const descriptor = index.files.find(f => f.name === DESCRIPTOR_MEMBER)
-    if (
-      !transcript ||
-      transcript.chunks < 1 ||
-      !descriptor ||
-      descriptor.chunks < 1
-    ) {
+    if (!transcript || transcript.chunks < 1 || !descriptor || descriptor.chunks < 1) {
       continue
     }
     candidates.push({ id, transcript, descriptor })
@@ -511,15 +509,9 @@ function stepLines(s: AtifStep): string[] {
  * lines are JSON-quoted so a crafted transcript cannot inject a line
  * outside the delimiters.
  */
-function packSections(
-  meta: PackMeta,
-  steps: AtifStep[],
-  selected: AtifStep[],
-): string[][] {
+function packSections(meta: PackMeta, steps: AtifStep[], selected: AtifStep[]): string[][] {
   const selectedOrdinals = new Set(selected.map(s => s.ordinal))
-  const omitted = contiguousRanges(
-    steps.map(s => s.ordinal).filter(o => !selectedOrdinals.has(o)),
-  )
+  const omitted = contiguousRanges(steps.map(s => s.ordinal).filter(o => !selectedOrdinals.has(o)))
   const included = contiguousRanges([...selectedOrdinals].sort((a, b) => a - b))
 
   const head: string[] = [
@@ -631,9 +623,7 @@ export async function handoffPack(
   }
   const hydrated = members[TRANSCRIPT_MEMBER]
   if (hydrated == null) {
-    throw new SignetHandoffError(
-      `session "${selection.id}" has no ${TRANSCRIPT_MEMBER} member`,
-    )
+    throw new SignetHandoffError(`session "${selection.id}" has no ${TRANSCRIPT_MEMBER} member`)
   }
   const descriptorHydrated = members[DESCRIPTOR_MEMBER]
   if (descriptorHydrated == null) {
@@ -678,9 +668,7 @@ export async function handoffPack(
     transcript: hydrated.record,
     findings: [],
     budget,
-    blocked: steps
-      .filter(s => s.raw.includes(`</${STEP_TAG}`))
-      .map(s => s.ordinal),
+    blocked: steps.filter(s => s.raw.includes(`</${STEP_TAG}`)).map(s => s.ordinal),
   }
   const blocked = new Set(meta.blocked)
 
@@ -712,7 +700,8 @@ export async function handoffPack(
     }
   } else {
     const firstUser = steps.find(s => s.source === 'user')
-    const firstAgent = firstUser && steps.find(s => s.source === 'agent' && s.ordinal > firstUser.ordinal)
+    const firstAgent =
+      firstUser && steps.find(s => s.source === 'agent' && s.ordinal > firstUser.ordinal)
     if (firstUser) tryAdd(firstUser)
     if (firstAgent) tryAdd(firstAgent)
     if (args.query !== undefined) {
