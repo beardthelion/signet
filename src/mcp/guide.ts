@@ -60,6 +60,13 @@ only ever holds ciphertext; decryption happens locally, inside this server.
   commit.<hex>.json records).
 - signet_session_pull(session_id) - reassemble a mirrored session,
   fail-closed on a torn or malformed mirror.
+- signet_session_handoff(session_id?, query?, steps?, budget?) - assemble a
+  bounded handoff pack for resuming work in another harness: verbatim
+  transcript slices (opening exchange, query-matched steps, trailing
+  turns) plus references for omitted step ranges. A bare call picks the
+  most recently mirrored session; query or session_id target one; steps=a-b
+  re-slices an omitted range. For durable facts use signet_recall; for
+  whole verbatim members use signet_session_pull.
 
 ## Grants are records, not permissions
 

@@ -23,6 +23,7 @@
  *     trust.
  */
 
+import type { ManifestEntry } from '../types/index.ts'
 import type { PullResult, PushResult } from '../client/client.ts'
 import {
   MANIFEST_ENTRY_KEY,
@@ -40,10 +41,15 @@ import {
   SignetMirrorCorrupt,
   SignetMirrorOversize,
 } from '../client/session_mirror.ts'
+import {
+  HANDOFF_BUDGET_MAX,
+  handoffPack,
+  SignetHandoffError,
+} from '../client/session_handoff.ts'
 import { captureLearnings } from '../learn/capture.ts'
 import type { LearningType } from '../learn/distill.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
-import { frontmatterScope, rankEntries } from './relevance.ts'
+import { frontmatterScope, rankEntries } from '../client/relevance.ts'
 
 export type ToolResult = { text: string; isError?: boolean }
 
@@ -57,6 +63,9 @@ export type SignetToolClient = {
   pull(): Promise<PullResult>
   hashes(): Promise<Record<string, string>>
   readEntry(entryKey: string): Promise<string | null>
+  readEntries(keys: string[]): Promise<Record<string, string>>
+  manifestView(): Promise<Record<string, ManifestEntry>>
+  readonly manifestSeq: number
   /**
    * Pull + decrypt only one section's entries against the verified manifest.
    * Optional: clients without it fall back to a full pull filtered locally.
@@ -668,6 +677,43 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
         return fail(
           renderError(`Pulling session "${bounded(sessionId, 120)}"`, e, 'Nothing was read.'),
         )
+      }
+    },
+
+    /**
+     * Assemble a bounded handoff pack from a mirrored session for a
+     * receiving harness: verbatim transcript slices (opening exchange,
+     * query-matched body steps, trailing turns) plus references that keep
+     * omitted ranges fetchable. Bare call selects the most recently
+     * mirrored session; query or session_id target explicitly. The pack is
+     * a view recomputed per call - nothing is stored.
+     */
+    async sessionHandoff(input: {
+      session_id?: string
+      query?: string
+      steps?: string
+      budget?: number
+    }): Promise<ToolResult> {
+      if (input.session_id !== undefined && !isKeySegment(input.session_id)) {
+        return fail(
+          `"${bounded(input.session_id, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
+        )
+      }
+      if (input.budget !== undefined && input.budget > HANDOFF_BUDGET_MAX) {
+        input = { ...input, budget: HANDOFF_BUDGET_MAX }
+      }
+      try {
+        const { text } = await handoffPack(client, {
+          sessionId: input.session_id,
+          query: input.query,
+          steps: input.steps,
+          budget: input.budget,
+        })
+        await sync()
+        return ok(text)
+      } catch (e) {
+        if (e instanceof SignetHandoffError) return fail(bounded(e.message, 600))
+        return fail(renderError('Assembling the session handoff', e, 'Nothing was read.'))
       }
     },
 

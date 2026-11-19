@@ -47,7 +47,10 @@ const apiError = (code: string, status: number) => json({ error: { code, message
  * test below read it all back.
  */
 function makeStub() {
-  const manifests = new Map<string, Map<string, { hash: string; size: number }>>()
+  const manifests = new Map<
+    string,
+    Map<string, { hash: string; size: number; updatedAt: string }>
+  >()
   const blobs = new Map<string, Buffer>() // `${ns}|${hash}` -> ciphertext
   const nonces = new Set<string>()
   const tokens = new Set<string>()
@@ -106,11 +109,22 @@ function makeStub() {
       }
       if (view === 'integrity') return entryRead(ns, MANIFEST_ENTRY_KEY)
       if (!m) return apiError('empty', 404)
-      return json({ namespace: ns, base: stubManifestHash({}), entries: {} })
+      return json({
+        namespace: ns,
+        base: stubManifestHash(Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))),
+        entries: Object.fromEntries(
+          [...m.entries()].map(([k, v]) => [
+            k,
+            { hash: v.hash, size: v.size, updatedAt: v.updatedAt },
+          ]),
+        ),
+      })
     }
 
     if (method === 'PUT' && entryKey === null) {
-      const m = manifests.get(ns) ?? new Map<string, { hash: string; size: number }>()
+      const m =
+        manifests.get(ns) ??
+        new Map<string, { hash: string; size: number; updatedAt: string }>()
       const currentHashes = Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))
       if (body.base !== undefined) {
         const expected = body.base === null ? stubManifestHash({}) : body.base
@@ -127,7 +141,11 @@ function makeStub() {
         const bytes = Buffer.from(b64, 'base64')
         const hash = sha256Prefixed(bytes)
         blobs.set(`${ns}|${hash}`, bytes)
-        m.set(key, { hash, size: bytes.byteLength })
+        m.set(key, {
+          hash,
+          size: bytes.byteLength,
+          updatedAt: `2026-01-01T00:00:${String(++counter).padStart(2, '0')}Z`,
+        })
         accepted.push(key)
       }
       manifests.set(ns, m)
@@ -261,6 +279,9 @@ describe('signet tools over the real encrypted wire path', () => {
           ['memory/'.padEnd(400, 'x')]: `sha256:${'0'.repeat(64)}`,
         }),
       readEntry: () => Promise.resolve(null),
+      readEntries: () => Promise.resolve({}),
+      manifestView: () => Promise.resolve({}),
+      manifestSeq: 0,
     }
     const r = await makeTools(fake).list()
     expect(r.text).toContain('memory/ok.md')
@@ -440,6 +461,7 @@ describe('grant tools', () => {
       'recall',
       'save',
       'search',
+      'sessionHandoff',
       'sessionPull',
       'sessionPush',
     ])
@@ -692,6 +714,63 @@ describe('session mirror tools', () => {
   })
 })
 
+describe('signet_session_handoff', () => {
+  const seed = async (tools: ReturnType<typeof makeTools>, id: string) => {
+    const transcript =
+      '{"schema_version":1,"steps":[' +
+      '{"step_id":"s1","source":"user","message":"pick up the tokenizer work"},' +
+      '{"step_id":"s2","source":"agent","message":"the tokenizer lives in src/tok"},' +
+      '{"step_id":"s3","source":"agent","message":"tests are green"}]}\n'
+    const descriptor =
+      `{"session_id":"${id}","source":"devin","storage_format":"foreign_transcript_v1"}\n`
+    const r = await tools.sessionPush(id, {
+      'session.json': descriptor,
+      'transcript.json': transcript,
+    })
+    expect(r.isError).toBeUndefined()
+  }
+
+  test('emits a pack for an explicit session and routes refusals', async () => {
+    const { tools } = rig()
+    await seed(tools, 'devin-one')
+
+    const r = await tools.sessionHandoff({ session_id: 'devin-one' })
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('session: devin-one')
+    expect(r.text).toContain('<archived-step ordinal="1"')
+    expect(r.text).toContain('the tokenizer lives in src/tok')
+
+    const both = await tools.sessionHandoff({ session_id: 'devin-one', query: 'x' })
+    expect(both.isError).toBe(true)
+    expect(both.text).toContain('not both')
+
+    const badId = await tools.sessionHandoff({ session_id: '../escape' })
+    expect(badId.isError).toBe(true)
+    expect(badId.text).toContain('not a valid session id')
+
+    const noMirror = await tools.sessionHandoff({ session_id: 'devin-ghost' })
+    expect(noMirror.isError).toBe(true)
+    expect(noMirror.text).toContain('no mirror stored')
+  })
+
+  test('an over-ceiling budget is capped, a matched query selects', async () => {
+    const { tools } = rig()
+    await seed(tools, 'devin-a')
+    const r = await tools.sessionHandoff({ query: 'tokenizer', budget: 9_999_999 })
+    expect(r.isError).toBeUndefined()
+    expect(r.text).toContain('session: devin-a')
+    expect(r.text.length).toBeLessThanOrEqual(32_000)
+  })
+
+  test('a query miss is an error naming candidates, not a silent latest', async () => {
+    const { tools } = rig()
+    await seed(tools, 'devin-a')
+    const r = await tools.sessionHandoff({ query: 'xylophone zymurgy' })
+    expect(r.isError).toBe(true)
+    expect(r.text).toContain('Candidates: devin-a')
+  })
+})
+
 // ─── Refusals and diagnostics ───────────────────────────────────────────
 
 describe('refusals and the stdout boundary', () => {
@@ -715,6 +794,9 @@ describe('refusals and the stdout boundary', () => {
       pull: () => Promise.resolve({ namespace: 'x', seq: 0, entries: {} }),
       hashes: () => Promise.resolve({}),
       readEntry: () => Promise.resolve(null),
+      readEntries: () => Promise.resolve({}),
+      manifestView: () => Promise.resolve({}),
+      manifestSeq: 0,
     }
     const tools = makeTools(errClient)
     const r = await tools.save('memory/a.md', 'x')
@@ -776,7 +858,7 @@ describe('stdout protocol integrity', () => {
   test('the adapter sources never write to stdout at all', () => {
     // Static belt-and-suspenders: grep the shipped modules for the two calls
     // that could put a byte on the protocol channel.
-    for (const f of ['server.ts', 'tools.ts', 'relevance.ts', 'guide.ts']) {
+    for (const f of ['server.ts', 'tools.ts', 'guide.ts']) {
       const src = readFileSync(new URL(`../src/mcp/${f}`, import.meta.url), 'utf8')
       expect(src).not.toContain('console.log')
       expect(src).not.toContain('process.stdout')
