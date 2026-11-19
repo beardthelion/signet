@@ -125,6 +125,9 @@ function makeStub() {
   let failNextPut = false
   let failAllPuts = false
   let onTrip: (() => void | Promise<void>) | null = null
+  /** Requests still to answer 429 before serving normally. */
+  let rateLimited = 0
+  let rateLimitAll = false
 
   const entryRead = (ns: string, key: string): Response => {
     const m = manifests.get(ns)
@@ -141,6 +144,16 @@ function makeStub() {
     const path = url.pathname
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
+
+    if (rateLimitAll || rateLimited > 0) {
+      if (rateLimited > 0) rateLimited--
+      return new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'x' } }), {
+        status: 429,
+        // A fractional second keeps the test fast; the client parses it as a
+        // number rather than requiring an integer.
+        headers: { 'content-type': 'application/json', 'retry-after': '0.01' },
+      })
+    }
 
     if (path === '/auth/challenge' && method === 'POST') {
       const nonce = `nonce-${++counter}`
@@ -268,6 +281,14 @@ function makeStub() {
     tripAllPuts: () => {
       failAllPuts = true
     },
+    /** Answer the next n requests (any route, auth included) with 429. */
+    rateLimitNext: (n: number) => {
+      rateLimited = n
+    },
+    /** Answer every request with 429 (retry exhaustion). */
+    rateLimitAllRequests: () => {
+      rateLimitAll = true
+    },
     /** Point the manifest entry at different stored bytes (tamper). */
     repointEntry(ns: string, key: string, hash: string) {
       manifests.get(ns)!.set(key, { hash, size: 0 })
@@ -290,6 +311,7 @@ function clientFor(
     genesisDid?: string
     attestations?: RotationAttestation[]
     lastSeq?: number
+    rateLimitRetries?: number
   },
 ): SignetClient {
   return new SignetClient({
@@ -298,6 +320,7 @@ function clientFor(
     identity,
     genesisDid: extra?.genesisDid,
     attestations: extra?.attestations,
+    rateLimitRetries: extra?.rateLimitRetries,
     lastSeq: extra?.lastSeq,
     passphrase: PASS,
   })
@@ -540,6 +563,34 @@ describe('wire failures surface honestly', () => {
       expect(err).toBeInstanceOf(SignetHttpError)
       expect((err as SignetHttpError).status).toBe(409)
       expect((err as SignetHttpError).code).toBe('stale_base')
+    }
+  })
+
+  test('429s are retried through, auth included, and the write still lands', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    // Three refusals span the auth challenge and the first data call; the
+    // bucket in front of them refills before the client's attempt ceiling.
+    stub.rateLimitNext(3)
+    const r = await client.push({ 'memory/a.md': 'v1\n' })
+    expect(r.uploaded).toContain('memory/a.md')
+    const out = await client.pull()
+    expect(out.entries['memory/a.md']).toBe('v1\n')
+  })
+
+  test('persistent 429s exhaust bounded retries and surface the error', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id, { rateLimitRetries: 3 })
+    stub.rateLimitAllRequests()
+    try {
+      await client.push({ 'memory/a.md': 'v1\n' })
+      expect.unreachable('push should have thrown')
+    } catch (err) {
+      expect(err).toBeInstanceOf(SignetHttpError)
+      expect((err as SignetHttpError).status).toBe(429)
+      expect((err as SignetHttpError).code).toBe('rate_limited')
     }
   })
 

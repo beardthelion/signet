@@ -101,6 +101,11 @@ export type SignetClientOptions = {
   onScanWarning?: (findings: Finding[]) => void
   /** Per-request budget in ms. Default 120s. */
   timeoutMs?: number
+  /**
+   * Max retries on a 429 before the error surfaces. Default 100; tests set
+   * small values to exercise exhaustion without waiting out real windows.
+   */
+  rateLimitRetries?: number
   /** Last verified manifest seq, e.g. from custody (SN-041 anti-rollback). */
   lastSeq?: number
   /** Injectable fetch - the wire boundary, mocked in tests. */
@@ -189,6 +194,21 @@ export class SignetTimeoutError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 120_000
 
+/**
+ * 429 retry policy: a token bucket at the spec default (240/min) grants one
+ * token every 250ms, so even a saturated bucket yields to a patient caller.
+ * A hundred-attempt ceiling paces a bulk import through a few refill
+ * windows; the per-wait cap keeps a hostile Retry-After from parking the
+ * process for hours.
+ */
+const RATE_LIMIT_MAX_RETRIES = 100
+const RATE_LIMIT_MAX_WAIT_MS = 30_000
+const RATE_LIMIT_JITTER = 0.25
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms))
+}
+
 /** One answered request: the status line plus the body, already read. */
 type Answer = { ok: boolean; status: number; statusText: string; raw: string }
 
@@ -208,6 +228,7 @@ export class SignetClient {
   private readonly scanMode: ScanMode
   private readonly onScanWarning?: (findings: Finding[]) => void
   private readonly timeoutMs: number
+  private readonly rateLimitRetries: number
   private readonly fetchFn: typeof fetch
   /** Derived once: the namespace is fixed for the life of this client. */
   private readonly encKey: Buffer
@@ -226,6 +247,7 @@ export class SignetClient {
     this.scanMode = opts.scanMode ?? 'block'
     this.onScanWarning = opts.onScanWarning
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    this.rateLimitRetries = opts.rateLimitRetries ?? RATE_LIMIT_MAX_RETRIES
     this.fetchFn = opts.fetchFn ?? fetch
     this.lastSeq = opts.lastSeq ?? 0
     this.encKey = deriveKey(opts.passphrase, this.namespace)
@@ -302,12 +324,21 @@ export class SignetClient {
     }
   }
 
-  /** Bare fetch on a clock, no auth. */
+  /**
+   * Bare fetch on a clock, no auth, with bounded retries on 429 - the
+   * server's per-DID token bucket refills continuously, so a rate-limited
+   * request that sleeps the server's Retry-After hint (jittered so parallel
+   * callers do not stampede the moment the bucket refills) almost always
+   * lands on a subsequent attempt. When no hint is present the wait backs
+   * off exponentially instead. Exhaustion surfaces the 429 as a normal
+   * error rather than spinning forever.
+   */
   private async rawRequest(
     method: string,
     url: string,
     headers?: Record<string, string>,
     body?: string,
+    rateAttempts = 0,
   ): Promise<Answer> {
     try {
       const res = await this.fetchFn(url, {
@@ -319,6 +350,16 @@ export class SignetClient {
       // A failed body read is a failed request, not an empty one - swallowing
       // it would turn a broken response into a phantom "empty body" answer.
       const raw = await res.text()
+      const retryAfterSec = Number(res.headers.get('retry-after'))
+      const retryAfterMs =
+        res.status === 429 && Number.isFinite(retryAfterSec) && retryAfterSec > 0
+          ? retryAfterSec * 1000
+          : undefined
+      if (res.status === 429 && rateAttempts < this.rateLimitRetries) {
+        const wait = Math.min(retryAfterMs ?? 250 * 2 ** rateAttempts, RATE_LIMIT_MAX_WAIT_MS)
+        await sleep(wait * (1 + Math.random() * RATE_LIMIT_JITTER))
+        return this.rawRequest(method, url, headers, body, rateAttempts + 1)
+      }
       return { ok: res.ok, status: res.status, statusText: res.statusText, raw }
     } catch (err) {
       if ((err as Error)?.name === 'TimeoutError') {
