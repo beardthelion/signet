@@ -33,7 +33,7 @@ const MAX_CHUNK_PAYLOAD = 1024 * 1024
 /** Chunk seq width in entry keys (SN-022). */
 const SEQ_WIDTH = 6
 /** The index entry always sits at seq 0. */
-const INDEX_SEQ = 0
+export const INDEX_SEQ = 0
 /** Whole-file caps bounding one mirrored file's plaintext. */
 const DEFAULT_FILE_CAP = 8 * 1024 * 1024
 const DEFAULT_CAPS: Record<string, number> = {
@@ -50,6 +50,12 @@ const chunksFor = (bytes: number, chunkBytes: number) => Math.ceil(bytes / chunk
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const FILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const CHUNK_SEG_RE = /^\d{6}$/
+
+function assertSessionId(sessionId: string): void {
+  if (!SESSION_ID_RE.test(sessionId)) {
+    throw new SignetMirrorCorrupt(`invalid session id ${JSON.stringify(sessionId)}`)
+  }
+}
 
 /**
  * Metadata members mirrored alongside events.jsonl. `transcript.json`
@@ -223,9 +229,7 @@ export async function mirrorSession(
   files: Record<string, string>,
   opts: MirrorOptions = {},
 ): Promise<MirrorOutcome> {
-  if (!SESSION_ID_RE.test(sessionId)) {
-    throw new SignetMirrorCorrupt(`invalid session id ${JSON.stringify(sessionId)}`)
-  }
+  assertSessionId(sessionId)
   const names = Object.keys(files).sort()
   if (names.length > MAX_MIRRORED_FILES) {
     throw new SignetMirrorOversize(`more than ${MAX_MIRRORED_FILES} files`)
@@ -345,9 +349,7 @@ export async function hydrateSession(
   client: MirrorClient,
   sessionId: string,
 ): Promise<Record<string, string> | null> {
-  if (!SESSION_ID_RE.test(sessionId)) {
-    throw new SignetMirrorCorrupt(`invalid session id ${JSON.stringify(sessionId)}`)
-  }
+  assertSessionId(sessionId)
   const indexBytes = await client.readEntry(seqKey(sessionId, INDEX_SEQ))
   if (indexBytes === null) return null
   if (indexBytes.length > MAX_INDEX_BYTES) throw new SignetMirrorCorrupt('index too large')
@@ -363,16 +365,7 @@ export async function hydrateSession(
       }
       chunks.push(chunk)
     }
-    const bytes = Buffer.concat(chunks.map(c => Buffer.from(c, 'utf8')))
-    if (bytes.length !== record.bytes) {
-      throw new SignetMirrorCorrupt(
-        `${record.name} reassembled to ${bytes.length} bytes, not ${record.bytes}`,
-      )
-    }
-    if (createHash('sha256').update(bytes).digest('hex') !== record.sha256) {
-      throw new SignetMirrorCorrupt(`${record.name} reassembled content fails its sha256`)
-    }
-    files[record.name] = bytes.toString('utf8')
+    files[record.name] = verifyAssembled(record, chunks)
   }
   return files
 }
@@ -381,57 +374,11 @@ export async function hydrateSession(
 export type MemberClient = Pick<SignetClient, 'readEntries'>
 
 /**
- * Reassemble one mirrored member for `sessionId` - the index plus the
- * member's own chunk range, batched so each batch verifies the signed
- * manifest once rather than per chunk. Returns null when no index exists
- * or the index names no such member; the distinction between the two is
- * positional (selection confirms the index key before hydrating, so null
- * in context means member-absent). Throws SignetMirrorCorrupt on a torn
- * range, byte-count mismatch, or sha256 mismatch - scoped to the named
- * member, so corruption in sibling members does not block this read.
+ * Concatenate a member's chunks and check them against its index record:
+ * byte count, then sha256 - both fail closed as SignetMirrorCorrupt.
  */
-export async function hydrateSessionMember(
-  client: MemberClient,
-  sessionId: string,
-  member: string,
-): Promise<{ content: string; record: MirrorFileRecord } | null> {
-  if (!SESSION_ID_RE.test(sessionId)) {
-    throw new SignetMirrorCorrupt(`invalid session id ${JSON.stringify(sessionId)}`)
-  }
-  if (!isMirroredSessionFile(member)) {
-    throw new SignetMirrorCorrupt(`not a mirrored session member: ${member}`)
-  }
-  let indexBytes: string | undefined
-  try {
-    indexBytes = (await client.readEntries([seqKey(sessionId, INDEX_SEQ)]))[
-      seqKey(sessionId, INDEX_SEQ)
-    ]
-  } catch (e) {
-    if (e instanceof SignetEntryMissing) return null
-    throw e
-  }
-  if (indexBytes === undefined) return null
-  if (indexBytes.length > MAX_INDEX_BYTES) throw new SignetMirrorCorrupt('index too large')
-  const index = parseIndex(indexBytes)
-  const record = index.files.find(f => f.name === member)
-  if (!record) return null
-
-  const keys: string[] = []
-  for (let s = record.first; s < record.first + record.chunks; s++) {
-    keys.push(seqKey(sessionId, s))
-  }
-  let fetched: Record<string, string>
-  try {
-    fetched = await client.readEntries(keys)
-  } catch (e) {
-    if (e instanceof SignetEntryMissing) {
-      throw new SignetMirrorCorrupt(
-        `index names chunk ${e.entryKey} of ${record.name}, which is absent`,
-      )
-    }
-    throw e
-  }
-  const bytes = Buffer.concat(keys.map(k => Buffer.from(fetched[k]!, 'utf8')))
+function verifyAssembled(record: MirrorFileRecord, chunks: string[]): string {
+  const bytes = Buffer.concat(chunks.map(c => Buffer.from(c, 'utf8')))
   if (bytes.length !== record.bytes) {
     throw new SignetMirrorCorrupt(
       `${record.name} reassembled to ${bytes.length} bytes, not ${record.bytes}`,
@@ -440,5 +387,95 @@ export async function hydrateSessionMember(
   if (createHash('sha256').update(bytes).digest('hex') !== record.sha256) {
     throw new SignetMirrorCorrupt(`${record.name} reassembled content fails its sha256`)
   }
-  return { content: bytes.toString('utf8'), record }
+  return bytes.toString('utf8')
+}
+
+/**
+ * Reassemble the named mirrored members for `sessionId` in one verified
+ * pass: the index plus every requested member's chunk range batched so
+ * the signed manifest is verified once rather than per member. Returns
+ * null when no index exists; a member the index does not name maps to
+ * null, so callers distinguish no-mirror from member-absent directly.
+ * Throws SignetMirrorCorrupt on a torn range, byte-count mismatch, or
+ * sha256 mismatch - scoped to the named members, so corruption in
+ * sibling members does not block these reads.
+ */
+export async function hydrateSessionMembers(
+  client: MemberClient,
+  sessionId: string,
+  members: string[],
+): Promise<Record<string, { content: string; record: MirrorFileRecord } | null> | null> {
+  assertSessionId(sessionId)
+  for (const member of members) {
+    if (!isMirroredSessionFile(member)) {
+      throw new SignetMirrorCorrupt(`not a mirrored session member: ${member}`)
+    }
+  }
+  const indexKey = seqKey(sessionId, INDEX_SEQ)
+  let indexBytes: string | undefined
+  try {
+    indexBytes = (await client.readEntries([indexKey]))[indexKey]
+  } catch (e) {
+    if (e instanceof SignetEntryMissing) return null
+    throw e
+  }
+  if (indexBytes === undefined) return null
+  if (indexBytes.length > MAX_INDEX_BYTES) throw new SignetMirrorCorrupt('index too large')
+  const index = parseIndex(indexBytes)
+
+  const records = new Map(members.map(m => [m, index.files.find(f => f.name === m)]))
+  const keys: string[] = []
+  const owner = new Map<string, string>()
+  for (const member of members) {
+    const record = records.get(member)
+    if (!record) continue
+    for (let s = record.first; s < record.first + record.chunks; s++) {
+      const key = seqKey(sessionId, s)
+      keys.push(key)
+      owner.set(key, member)
+    }
+  }
+  let fetched: Record<string, string>
+  try {
+    fetched = await client.readEntries(keys)
+  } catch (e) {
+    if (e instanceof SignetEntryMissing) {
+      throw new SignetMirrorCorrupt(
+        `index names chunk ${e.entryKey} of ${owner.get(e.entryKey) ?? 'a requested member'}, which is absent`,
+      )
+    }
+    throw e
+  }
+
+  const out: Record<string, { content: string; record: MirrorFileRecord } | null> = {}
+  for (const member of members) {
+    const record = records.get(member)
+    if (!record) {
+      out[member] = null
+      continue
+    }
+    const chunks: string[] = []
+    for (let s = record.first; s < record.first + record.chunks; s++) {
+      chunks.push(fetched[seqKey(sessionId, s)]!)
+    }
+    out[member] = { content: verifyAssembled(record, chunks), record }
+  }
+  return out
+}
+
+/**
+ * Reassemble one mirrored member for `sessionId`. Returns null when no
+ * index exists or the index names no such member; the distinction between
+ * the two is positional (selection confirms the index key before
+ * hydrating, so null in context means member-absent). Throws
+ * SignetMirrorCorrupt on a torn range, byte-count mismatch, or sha256
+ * mismatch - scoped to the named member.
+ */
+export async function hydrateSessionMember(
+  client: MemberClient,
+  sessionId: string,
+  member: string,
+): Promise<{ content: string; record: MirrorFileRecord } | null> {
+  const out = await hydrateSessionMembers(client, sessionId, [member])
+  return out === null ? null : out[member]!
 }

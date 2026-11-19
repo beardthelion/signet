@@ -25,6 +25,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { clientFromCustody, persistManifestSeq } from '../client/session.ts'
+import { HANDOFF_BUDGET_MAX } from '../client/session_handoff.ts'
 import { LEARNING_TYPES } from '../learn/distill.ts'
 import { DEFAULT_URL } from '../types/defaults.ts'
 import { GRANT_ACTIONS, SECTIONS } from '../types/index.ts'
@@ -312,7 +313,7 @@ export async function main(): Promise<void> {
           .number()
           .int()
           .positive()
-          .max(32_000)
+          .max(HANDOFF_BUDGET_MAX)
           .optional()
           .describe('Pack budget in characters (default and max 32000).'),
       },

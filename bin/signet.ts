@@ -307,13 +307,12 @@ async function cmdSessionImport(path: string, source = 'devin'): Promise<void> {
     }
     const id = `${source}-${base}`
     const files = {
-      'session.json':
-        JSON.stringify({
-          schema_version: 1,
-          session_id: id,
-          source,
-          storage_format: 'foreign_transcript_v1',
-        }) + '\n',
+      'session.json': `${JSON.stringify({
+        schema_version: 1,
+        session_id: id,
+        source,
+        storage_format: 'foreign_transcript_v1',
+      })}\n`,
       'transcript.json': await readFile(file, 'utf8'),
     }
     try {

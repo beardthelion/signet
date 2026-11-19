@@ -41,11 +41,7 @@ import {
   SignetMirrorCorrupt,
   SignetMirrorOversize,
 } from '../client/session_mirror.ts'
-import {
-  HANDOFF_BUDGET_MAX,
-  handoffPack,
-  SignetHandoffError,
-} from '../client/session_handoff.ts'
+import { handoffPack, SignetHandoffError } from '../client/session_handoff.ts'
 import { captureLearnings } from '../learn/capture.ts'
 import type { LearningType } from '../learn/distill.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
@@ -120,6 +116,9 @@ function snippet(content: string, max = 200): string {
   const oneLine = content.replace(/\s+/g, ' ').trim()
   return oneLine.length > max ? `${oneLine.slice(0, max)}...` : oneLine
 }
+
+const badSessionId = (id: string) =>
+  `"${bounded(id, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`
 
 // Output bounds: a signet is holder data, but its size is unbounded from
 // the model's perspective - an entry can be megabytes and a namespace can
@@ -598,9 +597,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
      */
     async sessionPush(sessionId: string, files: Record<string, string>): Promise<ToolResult> {
       if (!isKeySegment(sessionId)) {
-        return fail(
-          `"${bounded(sessionId, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
-        )
+        return fail(badSessionId(sessionId))
       }
       const names = Object.keys(files)
       if (names.length === 0) {
@@ -639,9 +636,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
      */
     async sessionPull(sessionId: string): Promise<ToolResult> {
       if (!isKeySegment(sessionId)) {
-        return fail(
-          `"${bounded(sessionId, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
-        )
+        return fail(badSessionId(sessionId))
       }
       try {
         const files = await hydrateSession(client, sessionId)
@@ -695,12 +690,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
       budget?: number
     }): Promise<ToolResult> {
       if (input.session_id !== undefined && !isKeySegment(input.session_id)) {
-        return fail(
-          `"${bounded(input.session_id, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
-        )
-      }
-      if (input.budget !== undefined && input.budget > HANDOFF_BUDGET_MAX) {
-        input = { ...input, budget: HANDOFF_BUDGET_MAX }
+        return fail(badSessionId(input.session_id))
       }
       try {
         const { text } = await handoffPack(client, {

@@ -312,11 +312,6 @@ function makeStub() {
     repointEntry(ns: string, key: string, hash: string) {
       manifests.get(ns)!.set(key, { hash, size: 0, updatedAt: '2026-01-01T00:00:00Z' })
     },
-    /** Force one entry's updatedAt in the unsigned manifest view. */
-    stampUpdatedAt(ns: string, key: string, updatedAt: string) {
-      const meta = manifests.get(ns)!.get(key)!
-      manifests.get(ns)!.set(key, { ...meta, updatedAt })
-    },
     /** Every request the stub saw, as `METHOD path`. */
     requests(): string[] {
       return [...requestLog]
@@ -1121,7 +1116,7 @@ describe('hydrateSessionMember (member-scoped hydrate)', () => {
     stub.repointEntry(
       client.namespace,
       `sessions/devin-x/${String(eventsRec.first).padStart(6, '0')}`,
-      'sha256:' + 'a'.repeat(64),
+      `sha256:${'a'.repeat(64)}`,
     )
     const out = await hydrateSessionMember(client, 'devin-x', 'transcript.json')
     expect(out!.content).toBe(transcript)

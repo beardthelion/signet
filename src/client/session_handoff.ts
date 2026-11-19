@@ -22,12 +22,13 @@
  * the signet.
  */
 
-import type { ManifestEntry } from '../types/index.ts'
+import { isKeySegment, type ManifestEntry } from '../types/index.ts'
 import { sessionEntryKey, SignetEntryMissing } from './client.ts'
 import { rankEntries } from './relevance.ts'
 import { type Finding, scanEntry } from './secretscan.ts'
 import {
-  hydrateSessionMember,
+  hydrateSessionMembers,
+  INDEX_SEQ,
   type MirrorFileRecord,
   parseIndex,
   seqKey,
@@ -68,19 +69,19 @@ export type HandoffResult = {
   findings: Finding[]
 }
 
-const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const INDEX_KEY_RE = /^sessions\/([^/]+)\/000000$/
 const STEPS_RANGE_RE = /^(\d+)-(\d+)$/
 const DESCRIPTOR_MEMBER = 'session.json'
 const TRANSCRIPT_MEMBER = 'transcript.json'
 
-// ─── Argument surface (shared by CLI parsing and the MCP schema) ────────
+// ─── Argument surface (the HandoffArgs both surfaces feed the core) ────
 
 /**
  * Parse `signet session handoff` argv into HandoffArgs: an optional
  * positional session id plus --query, --steps a-b, and --budget n flags.
- * The returned args still go through handoffPack's own validation, so a
- * surface only checks shape here, never semantics.
+ * The MCP surface builds HandoffArgs from its zod schema instead; both
+ * still go through handoffPack's own validation, so a surface only
+ * checks shape here, never semantics.
  */
 export function parseHandoffArgs(args: string[]): HandoffArgs {
   const out: HandoffArgs = {}
@@ -116,7 +117,7 @@ function checkArgs(args: HandoffArgs): { steps?: [number, number]; budget: numbe
   if (args.sessionId !== undefined && args.query !== undefined) {
     throw new SignetHandoffError('pass either session_id or query, not both')
   }
-  if (args.sessionId !== undefined && !SESSION_ID_RE.test(args.sessionId)) {
+  if (args.sessionId !== undefined && !isKeySegment(args.sessionId)) {
     throw new SignetHandoffError(
       `"${args.sessionId}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit`,
     )
@@ -288,40 +289,36 @@ function sessionIdsFrom(keys: Iterable<string>): string[] {
   const ids: string[] = []
   for (const key of keys) {
     const m = INDEX_KEY_RE.exec(key)
-    if (m && SESSION_ID_RE.test(m[1]!)) ids.push(m[1]!)
+    if (m && isKeySegment(m[1]!)) ids.push(m[1]!)
   }
   return ids.sort()
 }
 
 /**
  * readEntries that tolerates absence: keys the verified manifest does not
- * name are reported as missing rather than thrown, for candidate scans
- * where one stale unsigned-view entry must not kill the whole query. The
- * SELECTED session's members still go through the strict, fail-closed
- * hydrate path.
+ * name are skipped rather than thrown, for candidate scans where one
+ * stale unsigned-view entry must not kill the whole query. The SELECTED
+ * session's members still go through the strict, fail-closed hydrate
+ * path.
  */
 async function readPresent(
   client: HandoffClient,
   keys: string[],
-): Promise<{ entries: Record<string, string>; missing: Set<string> }> {
-  const missing = new Set<string>()
+): Promise<Record<string, string>> {
   let want = keys
-  for (let guard = 0; guard <= keys.length; guard++) {
+  for (;;) {
     try {
-      return { entries: await client.readEntries(want), missing }
+      return await client.readEntries(want)
     } catch (e) {
       if (!(e instanceof SignetEntryMissing)) throw e
-      missing.add(e.entryKey)
-      want = want.filter(k => k !== e.entryKey)
-      if (want.length === 0) return { entries: {}, missing }
+      want = want.filter(k => !e.missingKeys.includes(k))
+      if (want.length === 0) return {}
     }
   }
-  throw new SignetHandoffError('internal: readPresent guard exhausted')
 }
 
 type Candidate = {
   id: string
-  index: ReturnType<typeof parseIndex>
   transcript: MirrorFileRecord
   descriptor: MirrorFileRecord
 }
@@ -332,11 +329,13 @@ type Candidate = {
  * carrying a torn index is skipped, never fatal to the rest.
  */
 async function loadCandidates(client: HandoffClient, ids: string[]): Promise<Candidate[]> {
-  const indexKeys = ids.map(id => seqKey(id, 0))
-  const { entries } = await readPresent(client, indexKeys)
+  const entries = await readPresent(
+    client,
+    ids.map(id => seqKey(id, INDEX_SEQ)),
+  )
   const candidates: Candidate[] = []
   for (const id of ids) {
-    const indexBytes = entries[seqKey(id, 0)]
+    const indexBytes = entries[seqKey(id, INDEX_SEQ)]
     if (indexBytes === undefined) continue
     let index: ReturnType<typeof parseIndex>
     try {
@@ -347,7 +346,7 @@ async function loadCandidates(client: HandoffClient, ids: string[]): Promise<Can
     const transcript = index.files.find(f => f.name === TRANSCRIPT_MEMBER)
     const descriptor = index.files.find(f => f.name === DESCRIPTOR_MEMBER)
     if (!transcript || !descriptor || descriptor.chunks < 1) continue
-    candidates.push({ id, index, transcript, descriptor })
+    candidates.push({ id, transcript, descriptor })
   }
   return candidates
 }
@@ -359,26 +358,33 @@ async function loadCandidates(client: HandoffClient, ids: string[]): Promise<Can
  */
 async function selectLatest(client: HandoffClient): Promise<Selection> {
   const view = await client.manifestView()
-  // Walk the ordering from most recent down until a session actually
-  // carries a transcript; each check costs one verified index read.
-  const ordered = sessionIdsFrom(Object.keys(view)).sort((a, b) => {
-    const sa = view[seqKey(a, 0)]!.updatedAt
-    const sb = view[seqKey(b, 0)]!.updatedAt
+  const stamps = new Map<string, string>()
+  for (const id of sessionIdsFrom(Object.keys(view))) {
+    stamps.set(id, view[seqKey(id, INDEX_SEQ)]!.updatedAt)
+  }
+  const ordered = [...stamps.keys()].sort((a, b) => {
+    const sa = stamps.get(a)!
+    const sb = stamps.get(b)!
     return sb === sa ? a.localeCompare(b) : sb < sa ? -1 : 1
   })
+  if (ordered.length === 0) {
+    throw new SignetHandoffError('no mirrored sessions are stored in this signet')
+  }
+  // One batched index read; a session absent from the verified manifest
+  // or carrying a torn index is ineligible, never fatal to the rest.
+  const entries = await readPresent(
+    client,
+    ordered.map(id => seqKey(id, INDEX_SEQ)),
+  )
   for (const id of ordered) {
+    const indexBytes = entries[seqKey(id, INDEX_SEQ)]
+    if (indexBytes === undefined) continue
     try {
-      const indexBytes = (await client.readEntries([seqKey(id, 0)]))[
-        seqKey(id, 0)
-      ]
-      if (indexBytes === undefined) continue
-      const index = parseIndex(indexBytes)
-      if (index.files.some(f => f.name === TRANSCRIPT_MEMBER)) return { id, mode: 'latest' }
+      if (parseIndex(indexBytes).files.some(f => f.name === TRANSCRIPT_MEMBER)) {
+        return { id, mode: 'latest' }
+      }
     } catch (e) {
-      // A missing index entry or a torn index just makes the session
-      // ineligible; integrity and transport errors still surface.
-      if (e instanceof SignetEntryMissing || e instanceof SignetMirrorCorrupt) continue
-      throw e
+      if (!(e instanceof SignetMirrorCorrupt)) throw e
     }
   }
   throw new SignetHandoffError('no mirrored session carries a transcript.json member')
@@ -406,9 +412,8 @@ async function selectByQuery(client: HandoffClient, query: string): Promise<Sele
       keys.push(sessionEntryKey(c.id, c.transcript.first + c.transcript.chunks - 1))
     }
   }
-  const { entries } = await readPresent(client, keys)
+  const entries = await readPresent(client, keys)
   const corpus: Record<string, string> = {}
-  const skipped: string[] = []
   for (const c of candidates) {
     const desc = entries[sessionEntryKey(c.id, c.descriptor.first)]
     const head = entries[sessionEntryKey(c.id, c.transcript.first)]
@@ -416,10 +421,7 @@ async function selectByQuery(client: HandoffClient, query: string): Promise<Sele
       c.transcript.chunks > 1
         ? entries[sessionEntryKey(c.id, c.transcript.first + c.transcript.chunks - 1)]
         : undefined
-    if (desc === undefined || head === undefined) {
-      skipped.push(c.id)
-      continue
-    }
+    if (desc === undefined || head === undefined) continue
     corpus[c.id] = `${desc}\n${head}${tail === undefined ? '' : `\n${tail}`}`
   }
   if (Object.keys(corpus).length === 0) {
@@ -537,14 +539,8 @@ function renderPack(meta: PackMeta, steps: AtifStep[], selected: AtifStep[]): st
 }
 
 /** Findings keyed to the step that produced them. */
-function scanSlices(sessionId: string, selected: AtifStep[]): Finding[] {
-  const out: Finding[] = []
-  for (const s of selected) {
-    for (const f of scanEntry(`sessions/${sessionId}/step-${s.ordinal}`, s.raw)) {
-      out.push({ ...f, entryKey: `step ${s.stepId ?? s.ordinal}` })
-    }
-  }
-  return out
+function scanStep(s: AtifStep): Finding[] {
+  return scanEntry(`step ${s.stepId ?? s.ordinal}`, s.raw)
 }
 
 // ─── The selector ───────────────────────────────────────────────────────
@@ -569,26 +565,21 @@ export async function handoffPack(
     selection = await selectLatest(client)
   }
 
-  const hydrated = await hydrateSessionMember(client, selection.id, TRANSCRIPT_MEMBER)
-  if (hydrated === null) {
-    // null covers both absent index and absent member; read the index key
-    // to tell the caller which it was.
-    try {
-      await client.readEntries([seqKey(selection.id, 0)])
-      throw new SignetHandoffError(
-        `session "${selection.id}" has no ${TRANSCRIPT_MEMBER} member`,
-      )
-    } catch (e) {
-      if (e instanceof SignetHandoffError) throw e
-      if (e instanceof SignetEntryMissing) {
-        throw new SignetHandoffError(`no mirror stored for session "${selection.id}"`)
-      }
-      throw e
-    }
+  const members = await hydrateSessionMembers(client, selection.id, [
+    TRANSCRIPT_MEMBER,
+    DESCRIPTOR_MEMBER,
+  ])
+  if (members === null) {
+    throw new SignetHandoffError(`no mirror stored for session "${selection.id}"`)
   }
-
-  const descriptorHydrated = await hydrateSessionMember(client, selection.id, DESCRIPTOR_MEMBER)
-  if (descriptorHydrated === null) {
+  const hydrated = members[TRANSCRIPT_MEMBER]
+  if (hydrated == null) {
+    throw new SignetHandoffError(
+      `session "${selection.id}" has no ${TRANSCRIPT_MEMBER} member`,
+    )
+  }
+  const descriptorHydrated = members[DESCRIPTOR_MEMBER]
+  if (descriptorHydrated == null) {
     throw new SignetHandoffError(
       `session "${selection.id}" has no ${DESCRIPTOR_MEMBER} descriptor to dispatch on`,
     )
@@ -651,7 +642,8 @@ export async function handoffPack(
 
   if (stepRange) {
     for (const s of steps) {
-      if (s.ordinal >= stepRange[0] && s.ordinal <= stepRange[1]) tryAdd(s)
+      if (s.ordinal > stepRange[1]) break
+      if (s.ordinal >= stepRange[0]) tryAdd(s)
     }
   } else {
     const firstUser = steps.find(s => s.source === 'user')
@@ -671,12 +663,23 @@ export async function handoffPack(
   }
 
   // The warn-scan banner adds text; drop the least-priority selections
-  // (tail-most first, then the opening pair) until it fits.
-  meta.findings = scanSlices(selection.id, ordered())
+  // (tail-most first, then the opening pair) until it fits. Findings are
+  // per-step, so each is computed once.
+  const findingCache = new Map<number, Finding[]>()
+  const findingsFor = (list: AtifStep[]) =>
+    list.flatMap(s => {
+      let f = findingCache.get(s.ordinal)
+      if (!f) {
+        f = scanStep(s)
+        findingCache.set(s.ordinal, f)
+      }
+      return f
+    })
+  meta.findings = findingsFor(ordered())
   while (!fits() && selected.size > 0) {
     const last = ordered().at(-1)!
     selected.delete(last.ordinal)
-    meta.findings = scanSlices(selection.id, ordered())
+    meta.findings = findingsFor(ordered())
   }
   if (!fits()) {
     throw new SignetHandoffError(`budget ${budget} cannot hold the pack header and scan banner`)

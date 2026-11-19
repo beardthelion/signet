@@ -188,32 +188,30 @@ type StepSpec = {
 }
 
 function transcript(specs: StepSpec[]): string {
-  return (
-    JSON.stringify(
-      {
-        schema_version: 1,
-        session_id: 'devin-fixture',
-        steps: specs.map((s, i) => ({
-          step_id: s.step_id ?? `step-${i + 1}`,
-          source: s.source ?? 'user',
-          timestamp: s.timestamp ?? '2026-01-01T00:00:00Z',
-          message: s.message ?? `message ${i + 1}`,
-          ...s.extra,
-        })),
-      },
-      null,
-      0,
-    ) + '\n'
-  )
+  return `${JSON.stringify(
+    {
+      schema_version: 1,
+      session_id: 'devin-fixture',
+      steps: specs.map((s, i) => ({
+        step_id: s.step_id ?? `step-${i + 1}`,
+        source: s.source ?? 'user',
+        timestamp: s.timestamp ?? '2026-01-01T00:00:00Z',
+        message: s.message ?? `message ${i + 1}`,
+        ...s.extra,
+      })),
+    },
+    null,
+    0,
+  )}\n`
 }
 
 const descriptor = (id: string, source = 'devin') =>
-  JSON.stringify({
+  `${JSON.stringify({
     session_id: id,
     source,
     storage_format: 'foreign_transcript_v1',
     mirrored_from: 'foreign',
-  }) + '\n'
+  })}\n`
 
 async function seedSession(
   client: SignetClient,

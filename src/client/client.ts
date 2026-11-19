@@ -190,7 +190,11 @@ export class SignetSkippedError extends Error {
 
 /** A batched read asked for a key the verified manifest does not name. */
 export class SignetEntryMissing extends Error {
-  constructor(readonly entryKey: string) {
+  constructor(
+    readonly entryKey: string,
+    /** Every missing key from the same request, first included. */
+    readonly missingKeys: string[] = [entryKey],
+  ) {
     super(`signet: the verified manifest does not name "${entryKey}"`)
     this.name = 'SignetEntryMissing'
   }
@@ -885,9 +889,8 @@ export class SignetClient {
     if (!remote) throw new SignetEntryMissing(keys[0]!)
     this.adoptManifest(remote)
     const manifestEntries = remote.signed.manifest.entries
-    for (const k of keys) {
-      if (manifestEntries[k] === undefined) throw new SignetEntryMissing(k)
-    }
+    const missing = keys.filter(k => manifestEntries[k] === undefined)
+    if (missing.length > 0) throw new SignetEntryMissing(missing[0]!, missing)
     return this.fetchEntries(manifestEntries, keys)
   }
 
@@ -905,22 +908,7 @@ export class SignetClient {
     this.adoptManifest(remote)
     const expectedHash = remote.signed.manifest.entries[entryKey]
     if (expectedHash === undefined) return null
-    const res = await this.request('GET', this.entryPath(entryKey))
-    if (!res.ok) throw httpError(res)
-    const body = JSON.parse(res.raw) as { entry?: unknown; hash?: unknown }
-    if (typeof body.entry !== 'string') {
-      throw new SignetIntegrityError(`signet: no blob in the response for "${entryKey}"`)
-    }
-    if (body.hash !== expectedHash || ciphertextHash(body.entry) !== expectedHash) {
-      throw new SignetIntegrityError(
-        `signet: ciphertext hash mismatch for "${entryKey}" - blob does not match the manifest`,
-      )
-    }
-    try {
-      return decryptEntry(this.encKey, entryKey, body.entry)
-    } catch (err) {
-      throw new SignetDecryptError(entryKey, (err as Error).message)
-    }
+    return this.fetchEntry(entryKey, expectedHash)
   }
 
   /**
