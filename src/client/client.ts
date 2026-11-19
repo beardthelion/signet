@@ -31,7 +31,14 @@
  * stand up the wire contract in-process.
  */
 
-import { EntryKey, type RotationAttestation, type Section, SignedManifest } from '../types/index.ts'
+import {
+  EntryKey,
+  Manifest,
+  type ManifestEntry,
+  type RotationAttestation,
+  type Section,
+  SignedManifest,
+} from '../types/index.ts'
 import { ciphertextHash, decryptEntry, deriveKey, encryptEntry } from './crypto.ts'
 import {
   AUTH_PREIMAGE_PREFIX,
@@ -178,6 +185,18 @@ export class SignetSkippedError extends Error {
         (accepted.length ? `. ${accepted.length} other entries were stored` : ''),
     )
     this.name = 'SignetSkippedError'
+  }
+}
+
+/** A batched read asked for a key the verified manifest does not name. */
+export class SignetEntryMissing extends Error {
+  constructor(
+    readonly entryKey: string,
+    /** Every missing key from the same request, first included. */
+    readonly missingKeys: string[] = [entryKey],
+  ) {
+    super(`signet: the verified manifest does not name "${entryKey}"`)
+    this.name = 'SignetEntryMissing'
   }
 }
 
@@ -834,6 +853,48 @@ export class SignetClient {
   }
 
   /**
+   * The bare namespace view: per-entry `{hash, size, updatedAt}` metadata,
+   * no bodies. Empty object when the signet does not exist yet. This view
+   * is unsigned store output - `updatedAt` is the server's own clock stamp,
+   * useful as an ordering hint (e.g. "most recently mirrored session") but
+   * never as integrity evidence: content reads still verify against the
+   * signed manifest.
+   */
+  async manifestView(): Promise<Record<string, ManifestEntry>> {
+    const res = await this.request('GET', this.endpoint())
+    if (res.status === 404) {
+      const err = httpError(res)
+      if (err.code !== 'empty') throw err
+      return {}
+    }
+    if (!res.ok) throw httpError(res)
+    const parsed = Manifest.safeParse(JSON.parse(res.raw))
+    if (!parsed.success) {
+      throw new Error('signet: manifest view carried malformed entry metadata')
+    }
+    return parsed.data.entries
+  }
+
+  /**
+   * Read + decrypt several entries against ONE verified manifest: verify
+   * once, then fetch each blob in bounded parallel and hash-check it the
+   * same way readEntry does. A key the verified manifest does not name
+   * throws SignetEntryMissing - distinct from SignetIntegrityError so a
+   * caller can map absence to "not stored" without swallowing real
+   * corruption.
+   */
+  async readEntries(keys: string[]): Promise<Record<string, string>> {
+    if (keys.length === 0) return {}
+    const remote = await this.remoteManifest()
+    if (!remote) throw new SignetEntryMissing(keys[0]!, keys)
+    this.adoptManifest(remote)
+    const manifestEntries = remote.signed.manifest.entries
+    const missing = keys.filter(k => !Object.hasOwn(manifestEntries, k))
+    if (missing.length > 0) throw new SignetEntryMissing(missing[0]!, missing)
+    return this.fetchEntries(manifestEntries, keys)
+  }
+
+  /**
    * Read and decrypt one entry, verified against the signed manifest
    * (SN-041): the fetched blob's ciphertext hash must equal the hash the
    * verified manifest names for the key, and GCM must authenticate under
@@ -847,22 +908,7 @@ export class SignetClient {
     this.adoptManifest(remote)
     const expectedHash = remote.signed.manifest.entries[entryKey]
     if (expectedHash === undefined) return null
-    const res = await this.request('GET', this.entryPath(entryKey))
-    if (!res.ok) throw httpError(res)
-    const body = JSON.parse(res.raw) as { entry?: unknown; hash?: unknown }
-    if (typeof body.entry !== 'string') {
-      throw new SignetIntegrityError(`signet: no blob in the response for "${entryKey}"`)
-    }
-    if (body.hash !== expectedHash || ciphertextHash(body.entry) !== expectedHash) {
-      throw new SignetIntegrityError(
-        `signet: ciphertext hash mismatch for "${entryKey}" - blob does not match the manifest`,
-      )
-    }
-    try {
-      return decryptEntry(this.encKey, entryKey, body.entry)
-    } catch (err) {
-      throw new SignetDecryptError(entryKey, (err as Error).message)
-    }
+    return this.fetchEntry(entryKey, expectedHash)
   }
 
   /**

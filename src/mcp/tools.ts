@@ -32,7 +32,9 @@ import {
   SignetSkippedError,
   SignetTimeoutError,
 } from '../client/client.ts'
+import { frontmatterScope, rankEntries } from '../client/relevance.ts'
 import { SecretFoundError, scanModeFromEnv } from '../client/secretscan.ts'
+import { handoffPack, SignetHandoffError } from '../client/session_handoff.ts'
 import {
   hydrateSession,
   isMirroredSessionFile,
@@ -42,8 +44,8 @@ import {
 } from '../client/session_mirror.ts'
 import { captureLearnings } from '../learn/capture.ts'
 import type { LearningType } from '../learn/distill.ts'
+import type { ManifestEntry } from '../types/index.ts'
 import { EntryKey, Grant, isDeniedConfigKey, isKeySegment, type Section } from '../types/index.ts'
-import { frontmatterScope, rankEntries } from './relevance.ts'
 
 export type ToolResult = { text: string; isError?: boolean }
 
@@ -57,6 +59,9 @@ export type SignetToolClient = {
   pull(): Promise<PullResult>
   hashes(): Promise<Record<string, string>>
   readEntry(entryKey: string): Promise<string | null>
+  readEntries(keys: string[]): Promise<Record<string, string>>
+  manifestView(): Promise<Record<string, ManifestEntry>>
+  readonly manifestSeq: number
   /**
    * Pull + decrypt only one section's entries against the verified manifest.
    * Optional: clients without it fall back to a full pull filtered locally.
@@ -111,6 +116,9 @@ function snippet(content: string, max = 200): string {
   const oneLine = content.replace(/\s+/g, ' ').trim()
   return oneLine.length > max ? `${oneLine.slice(0, max)}...` : oneLine
 }
+
+const badSessionId = (id: string) =>
+  `"${bounded(id, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`
 
 // Output bounds: a signet is holder data, but its size is unbounded from
 // the model's perspective - an entry can be megabytes and a namespace can
@@ -589,9 +597,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
      */
     async sessionPush(sessionId: string, files: Record<string, string>): Promise<ToolResult> {
       if (!isKeySegment(sessionId)) {
-        return fail(
-          `"${bounded(sessionId, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
-        )
+        return fail(badSessionId(sessionId))
       }
       const names = Object.keys(files)
       if (names.length === 0) {
@@ -630,9 +636,7 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
      */
     async sessionPull(sessionId: string): Promise<ToolResult> {
       if (!isKeySegment(sessionId)) {
-        return fail(
-          `"${bounded(sessionId, 120)}" is not a valid session id: use letters, digits, ".", "_", "-", starting with a letter or digit.`,
-        )
+        return fail(badSessionId(sessionId))
       }
       try {
         const files = await hydrateSession(client, sessionId)
@@ -668,6 +672,38 @@ export function makeTools(client: SignetToolClient, opts: ToolOptions = {}) {
         return fail(
           renderError(`Pulling session "${bounded(sessionId, 120)}"`, e, 'Nothing was read.'),
         )
+      }
+    },
+
+    /**
+     * Assemble a bounded handoff pack from a mirrored session for a
+     * receiving harness: verbatim transcript slices (opening exchange,
+     * query-matched body steps, trailing turns) plus references that keep
+     * omitted ranges fetchable. Bare call selects the most recently
+     * mirrored session; query or session_id target explicitly. The pack is
+     * a view recomputed per call - nothing is stored.
+     */
+    async sessionHandoff(input: {
+      session_id?: string
+      query?: string
+      steps?: string
+      budget?: number
+    }): Promise<ToolResult> {
+      if (input.session_id !== undefined && !isKeySegment(input.session_id)) {
+        return fail(badSessionId(input.session_id))
+      }
+      try {
+        const { text } = await handoffPack(client, {
+          sessionId: input.session_id,
+          query: input.query,
+          steps: input.steps,
+          budget: input.budget,
+        })
+        await sync()
+        return ok(text)
+      } catch (e) {
+        if (e instanceof SignetHandoffError) return fail(bounded(e.message, 600))
+        return fail(renderError('Assembling the session handoff', e, 'Nothing was read.'))
       }
     },
 

@@ -289,6 +289,38 @@ export async function main(): Promise<void> {
     async ({ session_id }) => toMcp(await tools.sessionPull(session_id)),
   )
 
+  server.registerTool(
+    'signet_session_handoff',
+    {
+      title: 'Assemble a session handoff pack',
+      description:
+        'Select one mirrored session and emit a bounded handoff pack for a receiving harness: the descriptor, verbatim transcript slices (opening exchange, query-matched body steps, trailing turns), and references for fetching omitted step ranges. Bare call picks the most recently mirrored session; pass query or session_id to target. steps=a-b re-slices an omitted range (requires session_id). Use signet_recall for durable facts, signet_session_pull for whole verbatim members, signet_get for exact keys.',
+      inputSchema: {
+        session_id: z
+          .string()
+          .optional()
+          .describe('The mirrored session id to resume. Cannot combine with query.'),
+        query: z
+          .string()
+          .optional()
+          .describe(
+            'Natural-language selector ranking sessions on descriptor + transcript head/tail.',
+          ),
+        steps: z
+          .string()
+          .optional()
+          .describe('Step ordinal range a-b to re-slice; requires session_id.'),
+        budget: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Pack budget in characters (default and max 32000).'),
+      },
+    },
+    async args => toMcp(await tools.sessionHandoff(args)),
+  )
+
   const transport = new StdioServerTransport()
   await server.connect(transport)
   stderr(`ready • url=${process.env.SIGNET_URL ?? DEFAULT_URL} • namespace=${client.namespace}`)

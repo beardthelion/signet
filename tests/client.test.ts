@@ -22,6 +22,7 @@ import {
   MANIFEST_ENTRY_KEY,
   SignetClient,
   SignetDecryptError,
+  SignetEntryMissing,
   SignetHttpError,
   SignetIntegrityError,
   SignetSkippedError,
@@ -116,7 +117,10 @@ const apiError = (code: string, status: number, details?: Record<string, unknown
  * stored state the way a hostile store would.
  */
 function makeStub() {
-  const manifests = new Map<string, Map<string, { hash: string; size: number }>>()
+  const manifests = new Map<
+    string,
+    Map<string, { hash: string; size: number; updatedAt: string }>
+  >()
   const blobs = new Map<string, Buffer>() // `${ns}|${hash}` -> ciphertext
   const nonces = new Set<string>()
   const tokens = new Map<string, string>() // token -> did
@@ -128,6 +132,8 @@ function makeStub() {
   /** Requests still to answer 429 before serving normally. */
   let rateLimited = 0
   let rateLimitAll = false
+  /** Every request seen, as `METHOD path`. */
+  const requestLog: string[] = []
 
   const entryRead = (ns: string, key: string): Response => {
     const m = manifests.get(ns)
@@ -144,6 +150,7 @@ function makeStub() {
     const path = url.pathname
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    requestLog.push(`${method} ${url.pathname}${url.search}`)
 
     if (rateLimitAll || rateLimited > 0) {
       if (rateLimited > 0) rateLimited--
@@ -210,7 +217,16 @@ function makeStub() {
       }
       if (view === 'integrity') return entryRead(ns, MANIFEST_ENTRY_KEY)
       if (!m) return apiError('empty', 404)
-      return json({ namespace: ns, base: stubManifestHash({}), entries: {} })
+      return json({
+        namespace: ns,
+        base: stubManifestHash(Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))),
+        entries: Object.fromEntries(
+          [...m.entries()].map(([k, v]) => [
+            k,
+            { hash: v.hash, size: v.size, updatedAt: v.updatedAt },
+          ]),
+        ),
+      })
     }
 
     if (method === 'PUT' && entryKey === null) {
@@ -219,7 +235,8 @@ function makeStub() {
         await onTrip?.()
         return apiError('stale_base', 409, { current: 'sha256:0' })
       }
-      const m = manifests.get(ns) ?? new Map<string, { hash: string; size: number }>()
+      const m =
+        manifests.get(ns) ?? new Map<string, { hash: string; size: number; updatedAt: string }>()
       const currentHashes = Object.fromEntries([...m.entries()].map(([k, v]) => [k, v.hash]))
       if (body.base !== undefined) {
         const expected = body.base === null ? EMPTY_BASE : body.base
@@ -249,7 +266,11 @@ function makeStub() {
         }
         const hash = sha256Prefixed(bytes)
         blobs.set(`${ns}|${hash}`, bytes)
-        m.set(key, { hash, size: bytes.byteLength })
+        m.set(key, {
+          hash,
+          size: bytes.byteLength,
+          updatedAt: `2026-01-01T00:00:${String(++counter).padStart(2, '0')}Z`,
+        })
         accepted.push(key)
       }
       manifests.set(ns, m)
@@ -291,7 +312,11 @@ function makeStub() {
     },
     /** Point the manifest entry at different stored bytes (tamper). */
     repointEntry(ns: string, key: string, hash: string) {
-      manifests.get(ns)!.set(key, { hash, size: 0 })
+      manifests.get(ns)!.set(key, { hash, size: 0, updatedAt: '2026-01-01T00:00:00Z' })
+    },
+    /** Every request the stub saw, as `METHOD path`. */
+    requests(): string[] {
+      return [...requestLog]
     },
     /** The hash currently stored under a key. */
     hashOf(ns: string, key: string): string | undefined {
@@ -502,7 +527,11 @@ describe('integrity - fail closed (SN-041)', () => {
     // The store plants a key in its unsigned view that the signed manifest
     // never named - the client must refuse to sign that view into the next
     // manifest rather than adopt it.
-    stub.manifests.get(ns)!.set('memory/planted.md', { hash: `sha256:${'0'.repeat(64)}`, size: 1 })
+    stub.manifests.get(ns)!.set('memory/planted.md', {
+      hash: `sha256:${'0'.repeat(64)}`,
+      size: 1,
+      updatedAt: '2026-01-01T00:00:00Z',
+    })
     await expect(client.push({ 'memory/b.md': 'v2\n' })).rejects.toThrow(SignetIntegrityError)
     // The verified manifest is untouched; pull still works.
     const out = await client.pull()
@@ -925,5 +954,209 @@ describe('session mirroring (SN-022)', () => {
       'sessions/rogue/000001': 'x',
     })
     await expect(hydrateSession(client, 'rogue')).rejects.toBeInstanceOf(SignetMirrorCorrupt)
+  })
+})
+
+describe('manifestView + readEntries (handoff selection reads)', () => {
+  test('manifestView returns hash, size, and updatedAt per entry', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.push({ 'memory/a.md': 'alpha\n', 'memory/b.md': 'beta\n' })
+    const view = await client.manifestView()
+    const keys = Object.keys(view)
+      .filter(k => k !== MANIFEST_ENTRY_KEY)
+      .sort()
+    expect(keys).toEqual(['memory/a.md', 'memory/b.md'])
+    for (const key of keys) {
+      const meta = view[key]!
+      expect(meta.hash).toMatch(/^sha256:[0-9a-f]{64}$/)
+      expect(meta.size).toBeGreaterThan(0)
+      expect(meta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+      expect(stub.hashOf(client.namespace, key)).toBe(meta.hash)
+    }
+    // Ordering hint differs across entries: b was written second.
+    expect(view['memory/b.md']!.updatedAt > view['memory/a.md']!.updatedAt).toBe(true)
+  })
+
+  test('manifestView returns {} for a never-written namespace', async () => {
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    expect(await client.manifestView()).toEqual({})
+  })
+
+  test('readEntries verifies the manifest once and returns every key', async () => {
+    const stub = makeStub()
+    const id = generateIdentity()
+    const client = clientFor(stub, id)
+    await client.push({
+      'memory/one.md': '1\n',
+      'memory/two.md': '2\n',
+      'memory/three.md': '3\n',
+      'memory/four.md': '4\n',
+      'memory/five.md': '5\n',
+    })
+    const before = stub.requests().length
+    const out = await client.readEntries([
+      'memory/one.md',
+      'memory/two.md',
+      'memory/three.md',
+      'memory/four.md',
+      'memory/five.md',
+    ])
+    expect(out).toEqual({
+      'memory/one.md': '1\n',
+      'memory/two.md': '2\n',
+      'memory/three.md': '3\n',
+      'memory/four.md': '4\n',
+      'memory/five.md': '5\n',
+    })
+    // Exactly one integrity-view request (signed manifest fetch + verify);
+    // the remaining requests are the five authenticated blob reads.
+    const hits = stub.requests().slice(before)
+    const integrityGets = hits.filter(r => r.includes('view=integrity'))
+    expect(integrityGets.length).toBe(1)
+    const entryGets = hits.filter(r => /^GET \/signet\/[^/]+\/.+/.test(r))
+    expect(entryGets.length).toBe(5)
+    expect(client.manifestSeq).toBeGreaterThan(0)
+  })
+
+  test('readEntries rejects a key absent from the verified manifest', async () => {
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.push({ 'memory/one.md': '1\n' })
+    await expect(client.readEntries(['memory/one.md', 'memory/missing.md'])).rejects.toBeInstanceOf(
+      SignetEntryMissing,
+    )
+    // Absence is not an integrity failure - the manifest was fine.
+    await expect(client.readEntries(['memory/missing.md'])).rejects.not.toBeInstanceOf(
+      SignetIntegrityError,
+    )
+  })
+
+  test('readEntries keeps blob hash checks fail-closed', async () => {
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.push({ 'memory/one.md': '1\n', 'memory/two.md': '2\n' })
+    // Point two.md at one.md's blob: fetchable, but not the ciphertext the
+    // signed manifest names for it.
+    stub.repointEntry(
+      client.namespace,
+      'memory/two.md',
+      stub.hashOf(client.namespace, 'memory/one.md')!,
+    )
+    await expect(client.readEntries(['memory/one.md', 'memory/two.md'])).rejects.toBeInstanceOf(
+      SignetIntegrityError,
+    )
+  })
+
+  test('readEntries([]) touches nothing', async () => {
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.push({ 'memory/one.md': '1\n' })
+    const before = stub.requests().length
+    expect(await client.readEntries([])).toEqual({})
+    expect(stub.requests().length).toBe(before)
+  })
+})
+
+describe('hydrateSessionMember (member-scoped hydrate)', () => {
+  const seedSession = async (client: SignetClient) => {
+    const { mirrorSession } = await import('../src/client/session_mirror.ts')
+    const transcript =
+      '{"schema_version":1,"steps":[{"step_id":"s1","source":"user","message":"hi"}]}\n'
+    const descriptor =
+      '{"session_id":"devin-x","source":"devin","storage_format":"foreign_transcript_v1"}\n'
+    await mirrorSession(client, 'devin-x', {
+      'session.json': descriptor,
+      'transcript.json': transcript,
+      'events.jsonl': '{"e":1}\n',
+    })
+    return { transcript, descriptor }
+  }
+
+  test('hydrates only the requested member', async () => {
+    const { hydrateSessionMember } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.init()
+    const { transcript } = await seedSession(client)
+
+    const before = stub.requests().length
+    const out = await hydrateSessionMember(client, 'devin-x', 'transcript.json')
+    expect(out).not.toBeNull()
+    expect(out!.content).toBe(transcript)
+    // Exactly one entry read beyond the index: transcript.json is 1 chunk.
+    const entryReads = stub
+      .requests()
+      .slice(before)
+      .filter(r => /^GET \/signet\/[^/]+\/.+/.test(r))
+    expect(entryReads.length).toBe(2) // index + the single transcript chunk
+  })
+
+  test('returns null for an absent member and for a missing mirror', async () => {
+    const { hydrateSessionMember } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.init()
+    await seedSession(client)
+    expect(await hydrateSessionMember(client, 'devin-x', 'authority.json')).toBeNull()
+    expect(await hydrateSessionMember(client, 'devin-nope', 'transcript.json')).toBeNull()
+  })
+
+  test('a corrupt sibling member does not block transcript hydration', async () => {
+    const { hydrateSessionMember } = await import('../src/client/session_mirror.ts')
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.init()
+    const { transcript } = await seedSession(client)
+
+    // Corrupt events.jsonl's chunk: transcript hydration must not notice.
+    const index = JSON.parse(
+      (await client.readEntries(['sessions/devin-x/000000']))['sessions/devin-x/000000']!,
+    )
+    const eventsRec = index.files.find((f: { name: string }) => f.name === 'events.jsonl')
+    stub.repointEntry(
+      client.namespace,
+      `sessions/devin-x/${String(eventsRec.first).padStart(6, '0')}`,
+      `sha256:${'a'.repeat(64)}`,
+    )
+    const out = await hydrateSessionMember(client, 'devin-x', 'transcript.json')
+    expect(out!.content).toBe(transcript)
+  })
+
+  test('a missing transcript chunk fails closed as mirror corruption', async () => {
+    const { hydrateSessionMember, SignetMirrorCorrupt } = await import(
+      '../src/client/session_mirror.ts'
+    )
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.init()
+    await seedSession(client)
+    const index = JSON.parse(
+      (await client.readEntries(['sessions/devin-x/000000']))['sessions/devin-x/000000']!,
+    )
+    const tRec = index.files.find((f: { name: string }) => f.name === 'transcript.json')
+    const chunkKey = `sessions/devin-x/${String(tRec.first).padStart(6, '0')}`
+    // The verified manifest stops naming the chunk - a torn mirror.
+    await client.push({}, { deletions: [chunkKey] })
+    await expect(hydrateSessionMember(client, 'devin-x', 'transcript.json')).rejects.toBeInstanceOf(
+      SignetMirrorCorrupt,
+    )
+  })
+
+  test('a malformed index fails closed', async () => {
+    const { hydrateSessionMember, SignetMirrorCorrupt } = await import(
+      '../src/client/session_mirror.ts'
+    )
+    const stub = makeStub()
+    const client = clientFor(stub, generateIdentity())
+    await client.init()
+    await client.push({
+      'sessions/bad/000000': '{"v":2,"files":[{"name":"transcript.json"}]}',
+    })
+    await expect(hydrateSessionMember(client, 'bad', 'transcript.json')).rejects.toBeInstanceOf(
+      SignetMirrorCorrupt,
+    )
   })
 })

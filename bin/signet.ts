@@ -8,6 +8,8 @@
  *   signet init [--force]       create custody (genesis DID + passphrase) and publish
  *   signet push <dir>           encrypt + upload changed entries from <dir>
  *   signet pull <dir>           verify + download + decrypt into <dir>
+ *   signet session handoff [id] [--query q] [--steps a-b] [--budget n]
+ *                               emit a bounded handoff pack to stdout
  *   signet learn <file>         distill session content into memory/ entries (U7)
  *   signet export <file>        write an encrypted custody bundle (SN-102)
  *   signet import <file>        restore custody from a bundle [--force]
@@ -43,8 +45,9 @@ import {
   saveCustody,
 } from '../src/client/custody.ts'
 import { generateIdentity, namespaceFor } from '../src/client/identity.ts'
-import { clientFromCustody, persistManifestSeq } from '../src/client/session.ts'
 import { scanModeFromEnv } from '../src/client/secretscan.ts'
+import { clientFromCustody, persistManifestSeq } from '../src/client/session.ts'
+import { handoffPack, parseHandoffArgs } from '../src/client/session_handoff.ts'
 import {
   hydrateSession,
   isMirroredSessionFile,
@@ -304,13 +307,12 @@ async function cmdSessionImport(path: string, source = 'devin'): Promise<void> {
     }
     const id = `${source}-${base}`
     const files = {
-      'session.json':
-        JSON.stringify({
-          schema_version: 1,
-          session_id: id,
-          source,
-          storage_format: 'foreign_transcript_v1',
-        }) + '\n',
+      'session.json': `${JSON.stringify({
+        schema_version: 1,
+        session_id: id,
+        source,
+        storage_format: 'foreign_transcript_v1',
+      })}\n`,
       'transcript.json': await readFile(file, 'utf8'),
     }
     try {
@@ -334,6 +336,24 @@ async function cmdSessionImport(path: string, source = 'devin'): Promise<void> {
   )
   for (const id of refused) console.error(`refused (credential-shaped content): ${id}`)
   for (const f of failed) console.error(`failed: ${f}`)
+}
+
+/**
+ * Emit a session handoff pack to stdout - the same selector core the MCP
+ * signet_session_handoff tool serves, so identical args produce identical
+ * bytes. Pack text goes to stdout; scan diagnostics go to stderr.
+ */
+async function cmdSessionHandoff(args: string[]): Promise<void> {
+  const handoffArgs = parseHandoffArgs(args)
+  const { client, secrets } = await makeClient()
+  const { text, findings } = await handoffPack(client, handoffArgs)
+  await recordSeq(client, secrets)
+  if (findings.length > 0) {
+    console.error(
+      `warning: ${findings.length} credential-shaped finding(s) in the emitted pack (labeled in the pack body)`,
+    )
+  }
+  process.stdout.write(`${text}\n`)
 }
 
 async function cmdSession(
@@ -406,9 +426,14 @@ try {
       if (!a) usage()
       await cmdPull(a!)
       break
-    case 'session':
+    case 'session': {
+      if (a === 'handoff') {
+        await cmdSessionHandoff(argv.slice(2).filter(x => x !== '--force'))
+        break
+      }
       await cmdSession(a, b, c, d)
       break
+    }
     case 'learn':
       if (!a) usage()
       await cmdLearn(a!)
@@ -451,6 +476,8 @@ function usage(): never {
       '  signet pull <dir>        verify + download + decrypt into <dir>\n' +
       '  signet session push <id> <dir>   mirror a session dir as chunked entries\n' +
       '  signet session pull <id> <dir>   reassemble a mirrored session into <dir>\n' +
+      '  signet session handoff [id] [--query q] [--steps a-b] [--budget n]\n' +
+      '                               emit a bounded handoff pack to stdout\n' +
       '  signet session import <path> [source]   mirror foreign transcript(s) (file or dir)\n' +
       '  signet learn <file>      distill session content into memory/ entries\n' +
       '  signet export <file>     write an encrypted custody bundle\n' +
